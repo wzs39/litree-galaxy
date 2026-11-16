@@ -911,7 +911,8 @@ describe('M3 UI Components & DOM Contracts', () => {
     expect(onHover).toHaveBeenCalledTimes(1)
     expect(onHover).toHaveBeenCalledWith('u1')
 
-    // Re-render with hoveredId='u1' renders the 2D Hover Quick Info Card
+    // Re-render with hoveredId='u1' renders the 2D Hover Quick Info Card and label-pill click selects node
+    const onSelect = vi.fn()
     act(() => {
       root.render(
         <FallbackConstellation
@@ -932,7 +933,7 @@ describe('M3 UI Components & DOM Contracts', () => {
           resetToken={0}
           lastBurstAt={0}
           panRequest={null}
-          onSelect={vi.fn()}
+          onSelect={onSelect}
           onDrillDown={vi.fn()}
           onHover={onHover}
         />
@@ -947,6 +948,17 @@ describe('M3 UI Components & DOM Contracts', () => {
     expect(hoverCard).not.toBeNull()
     expect(hoverCard?.textContent).toContain('极限与连续')
     expect(container.querySelector('[data-testid="webgl-fallback-banner"]')).toBeNull()
+
+    // Clicking inside rendered label pill box right of circle center still hits u1
+    act(() => {
+      viewEl.dispatchEvent(
+        new PointerEvent('pointerdown', { clientX: pU1!.x + 28, clientY: pU1!.y, bubbles: true })
+      )
+      viewEl.dispatchEvent(
+        new PointerEvent('pointerup', { clientX: pU1!.x + 28, clientY: pU1!.y, bubbles: true })
+      )
+    })
+    expect(onSelect).toHaveBeenCalledWith('u1')
 
     vi.restoreAllMocks()
   })

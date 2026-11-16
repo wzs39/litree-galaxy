@@ -28,6 +28,7 @@ interface FallbackConstellationProps {
   activeRouteUnitIds?: readonly string[]
   pathTraceHighlight?: { nodeIds: readonly string[]; edgeIds: readonly string[] } | null
   bookmarkedIds?: ReadonlySet<string>
+  isolateSubgraph?: boolean
   theme?: ThemeMode
   quality?: QualityPreset
   resetToken: number
@@ -39,6 +40,7 @@ interface FallbackConstellationProps {
   onDrillDown: (id: string) => void
   onHover: (id: string | null) => void
   onViewportChange?: (box: { minX: number; minY: number; maxX: number; maxY: number }) => void
+  onSelectedAnchorChange?: (pos: { x: number; y: number } | null) => void
 }
 
 const STATE_COLOR: Record<NodeVisualState, string> = {
@@ -70,6 +72,11 @@ interface LabelBox {
   y1: number
   x2: number
   y2: number
+}
+
+interface HitBox extends LabelBox {
+  id: string
+  kind: 'node' | 'domain'
 }
 
 interface BackdropStar {
@@ -143,6 +150,7 @@ export function FallbackConstellation({
   activeRouteUnitIds = [],
   pathTraceHighlight = null,
   bookmarkedIds,
+  isolateSubgraph = false,
   theme = 'nebula',
   quality = 'balanced',
   resetToken,
@@ -153,7 +161,8 @@ export function FallbackConstellation({
   onSelect,
   onDrillDown,
   onHover,
-  onViewportChange
+  onViewportChange,
+  onSelectedAnchorChange
 }: FallbackConstellationProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -171,6 +180,8 @@ export function FallbackConstellation({
   const initializedPackRef = useRef<string | null>(null)
   const targetTransformRef = useRef<{ panX: number; panY: number; zoom: number } | null>(null)
   const animRafRef = useRef(0)
+  const hitBoxesRef = useRef<HitBox[]>([])
+  const renderedNodeIdsRef = useRef<Set<string>>(new Set())
   const dragRef = useRef<{
     active: boolean
     startX: number
@@ -300,6 +311,27 @@ export function FallbackConstellation({
       maxY: clamp(wy2 / h, 0.06, 1)
     })
   }, [transform, size.width, size.height, layout2D.worldWidth, layout2D.worldHeight, onViewportChange])
+
+  // Notify parent of selected node screen coordinates for floating secondary action menu
+  useEffect(() => {
+    if (!onSelectedAnchorChange) return
+    if (!selectedId) {
+      onSelectedAnchorChange(null)
+      return
+    }
+    const n = layout2D.nodes.get(selectedId)
+    if (!n) {
+      onSelectedAnchorChange(null)
+      return
+    }
+    const rect = containerRef.current?.getBoundingClientRect()
+    const left = rect?.left ?? 0
+    const top = rect?.top ?? 0
+    onSelectedAnchorChange({
+      x: left + n.x * transform.zoom + transform.panX,
+      y: top + n.y * transform.zoom + transform.panY
+    })
+  }, [selectedId, layout2D, transform, onSelectedAnchorChange])
 
   // Lightweight ambient pulse timer (only active for highlighted routes, selections, or burst ripple)
   useEffect(() => {
@@ -456,6 +488,15 @@ export function FallbackConstellation({
     const viewMinY = -transform.panY / transform.zoom - marginWorld
     const viewMaxX = (size.width - transform.panX) / transform.zoom + marginWorld
     const viewMaxY = (size.height - transform.panY) / transform.zoom + marginWorld
+    const hideDenseLeaves =
+      layout2D.nodes.size > 60 &&
+      viewLevel === 'galaxy' &&
+      relZoom < 2.2 &&
+      activeLens !== 'review_due' &&
+      activeLens !== 'bookmarked'
+
+    hitBoxesRef.current = []
+    renderedNodeIdsRef.current = new Set()
 
     // 1) Parallax starfield dust (lightweight fillRects; never distorts unit test arc counts)
     if (!isDaylight && !isMinimal && typeof ctx.fillRect === 'function') {
@@ -532,7 +573,16 @@ export function FallbackConstellation({
       const isUnlockHighlight = focusNeighbors.unlockEdgeIds.has(edge.id)
       const isHighlighted = isPrereqHighlight || isUnlockHighlight
 
-      ctx.globalAlpha = isHighlighted ? 0.96 : focusNeighbors.targetId ? 0.25 : 0.72
+      if (isolateSubgraph && focusNeighbors.targetId && !isHighlighted) {
+        continue
+      }
+      if (hideDenseLeaves && !isHighlighted) {
+        const fromKind = index.nodesById.get(edge.from)?.kind
+        const toKind = index.nodesById.get(edge.to)?.kind
+        if (fromKind === 'leaf' || toKind === 'leaf') continue
+      }
+
+      ctx.globalAlpha = isHighlighted ? 0.96 : focusNeighbors.targetId ? 0.16 : 0.72
       ctx.lineWidth = (isHighlighted ? 2.2 : 1) / transform.zoom
       ctx.strokeStyle = isPrereqHighlight
         ? '#38bdf8'
@@ -624,6 +674,25 @@ export function FallbackConstellation({
         focusNeighbors.prereqNodeIds.has(node2d.id) ||
         focusNeighbors.unlockNodeIds.has(node2d.id)
 
+      if (
+        hideDenseLeaves &&
+        node2d.kind === 'leaf' &&
+        !isSelected &&
+        !isHovered &&
+        !isNeighbor
+      ) {
+        continue
+      }
+
+      renderedNodeIdsRef.current.add(node2d.id)
+
+      const isolatedDim =
+        isolateSubgraph &&
+        focusNeighbors.targetId !== null &&
+        !isSelected &&
+        !isHovered &&
+        !isNeighbor
+
       // Subtle outer glow for lit / selected / core nodes using fillRect/ellipse or distinct alpha
       if ((isSelected || isHovered) && canGradient) {
         const glowR = node2d.radius * 3.1
@@ -637,7 +706,7 @@ export function FallbackConstellation({
         ctx.fill()
       }
 
-      ctx.globalAlpha = isSelected || isHovered ? 1 : visible ? 0.92 : 0.14
+      ctx.globalAlpha = isSelected || isHovered ? 1 : visible && !isolatedDim ? 0.92 : 0.14
       ctx.fillStyle =
         isDaylight && st === 'locked' ? 'rgba(100, 116, 139, 0.55)' : STATE_COLOR[st]
       const drawR = isSelected ? node2d.radius * 1.45 : isHovered ? node2d.radius * 1.28 : node2d.radius
@@ -705,6 +774,7 @@ export function FallbackConstellation({
         bgColor?: string
         borderColor?: string
         force?: boolean
+        hitTarget?: { id: string; kind: 'node' | 'domain' }
       }
     ) => {
       if (!opts.force && (sx < -60 || sx > size.width + 60 || sy < 40 || sy > size.height - 20)) {
@@ -712,8 +782,8 @@ export function FallbackConstellation({
       }
       ctx.font = `${opts.bold ? '600 ' : ''}${opts.fontPx}px sans-serif`
       const estW = canMeasure ? ctx.measureText(text).width : text.length * opts.fontPx * 0.65
-      const padX = opts.bgColor ? 6 : 2
-      const boxH = opts.fontPx + 6
+      const padX = opts.bgColor ? 8 : 3
+      const boxH = opts.fontPx + 8
       const box: LabelBox = {
         x1: sx - padX,
         y1: sy - boxH * 0.72,
@@ -724,6 +794,17 @@ export function FallbackConstellation({
         return
       }
       placedBoxes.push(box)
+
+      if (opts.hitTarget) {
+        hitBoxesRef.current.push({
+          id: opts.hitTarget.id,
+          kind: opts.hitTarget.kind,
+          x1: box.x1 - 8,
+          y1: box.y1 - 8,
+          x2: box.x2 + 8,
+          y2: box.y2 + 8
+        })
+      }
 
       if (opts.bgColor && canRoundRect && typeof ctx.fill === 'function') {
         ctx.save()
@@ -764,27 +845,28 @@ export function FallbackConstellation({
           : ''
 
       tryDrawPillLabel(sx, sy, `${item.kn.title.zh}${unitLitSummary}`, {
-        fontPx: item.node2d.kind === 'branch' ? 12 : item.node2d.kind === 'unit' ? 11.5 : 10.5,
+        fontPx: item.node2d.kind === 'branch' ? 12.5 : item.node2d.kind === 'unit' ? 11.5 : 10.5,
         bold: item.isFocus || item.node2d.kind !== 'leaf',
         textColor: isDaylight ? 'rgba(15, 23, 42, 0.92)' : 'rgba(226, 232, 240, 0.95)',
         bgColor:
           item.isFocus || item.node2d.kind !== 'leaf'
             ? isDaylight
-              ? 'rgba(255, 255, 255, 0.88)'
-              : 'rgba(12, 18, 36, 0.84)'
+              ? 'rgba(255, 255, 255, 0.9)'
+              : 'rgba(12, 18, 36, 0.88)'
             : undefined,
         borderColor: item.isFocus
           ? isDaylight
             ? '#0284c7'
             : '#38bdf8'
           : isDaylight
-            ? 'rgba(15, 23, 42, 0.14)'
-            : 'rgba(148, 163, 184, 0.22)',
-        force: item.isFocus
+            ? 'rgba(15, 23, 42, 0.16)'
+            : 'rgba(148, 163, 184, 0.28)',
+        force: item.isFocus,
+        hitTarget: { id: item.node2d.id, kind: 'node' }
       })
     }
 
-    // Priority 2: Domain Nebula Region Headers (drawn smoothly at top of each region)
+    // Priority 2: Domain Nebula Region Headers (drawn smoothly at top of each region & clickable to zoom into region)
     if (canMeasure && relZoom < 3.4) {
       for (const region of layout2D.regions.values()) {
         if (domainFilter && !domainFilter.has(region.domainId)) continue
@@ -794,8 +876,9 @@ export function FallbackConstellation({
           fontPx: 12,
           bold: true,
           textColor: isDaylight ? 'rgba(15, 23, 42, 0.92)' : region.color,
-          bgColor: isDaylight ? 'rgba(255, 255, 255, 0.9)' : 'rgba(8, 13, 28, 0.88)',
-          borderColor: region.color
+          bgColor: isDaylight ? 'rgba(255, 255, 255, 0.92)' : 'rgba(8, 13, 28, 0.9)',
+          borderColor: region.color,
+          hitTarget: { id: region.domainId, kind: 'domain' }
         })
       }
     }
@@ -812,6 +895,8 @@ export function FallbackConstellation({
     activeRouteUnitIds,
     bookmarkedIds,
     focusNeighbors,
+    isolateSubgraph,
+    viewLevel,
     theme,
     quality,
     lastBurstAt,
@@ -819,16 +904,34 @@ export function FallbackConstellation({
     index
   ])
 
-  const pickNodeAtClient = (clientX: number, clientY: number): string | null => {
+  const pickTargetAtClient = (
+    clientX: number,
+    clientY: number
+  ): { id: string; kind: 'node' | 'domain' } | null => {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return null
-    const worldX = (clientX - rect.left - transform.panX) / transform.zoom
-    const worldY = (clientY - rect.top - transform.panY) / transform.zoom
+    const localX = clientX - rect.left
+    const localY = clientY - rect.top
+
+    // 1. Check rendered capsule/pill bounding boxes first (makes full text card easily clickable!)
+    const boxes = hitBoxesRef.current
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i]!
+      if (localX >= b.x1 && localX <= b.x2 && localY >= b.y1 && localY <= b.y2) {
+        return { id: b.id, kind: b.kind }
+      }
+    }
+
+    // 2. Fallback to visible circle hit distance (never hit hidden dense leaves)
+    const worldX = (localX - transform.panX) / transform.zoom
+    const worldY = (localY - transform.panY) / transform.zoom
+    const renderedIds = renderedNodeIdsRef.current
 
     let bestId: string | null = null
     let bestDistSq = Infinity
     for (const node2d of layout2D.nodes.values()) {
-      const hitR = Math.max(12 / transform.zoom, node2d.radius * 2.1)
+      if (renderedIds.size > 0 && !renderedIds.has(node2d.id)) continue
+      const hitR = Math.max(20 / transform.zoom, node2d.radius * 2.8)
       const dx = worldX - node2d.x
       const dy = worldY - node2d.y
       const d2 = dx * dx + dy * dy
@@ -837,7 +940,12 @@ export function FallbackConstellation({
         bestId = node2d.id
       }
     }
-    return bestId
+    return bestId ? { id: bestId, kind: 'node' } : null
+  }
+
+  const pickNodeAtClient = (clientX: number, clientY: number): string | null => {
+    const hit = pickTargetAtClient(clientX, clientY)
+    return hit?.kind === 'node' ? hit.id : null
   }
 
   const hoveredInfo = useMemo(() => {
@@ -885,7 +993,7 @@ export function FallbackConstellation({
         if (dragRef.current.active) {
           const dx = e.clientX - dragRef.current.startX
           const dy = e.clientY - dragRef.current.startY
-          if (Math.hypot(dx, dy) > 4) {
+          if (Math.hypot(dx, dy) > 7) {
             dragRef.current.moved = true
           }
           setTransform((prev) => ({
@@ -917,7 +1025,24 @@ export function FallbackConstellation({
         const wasMoved = dragRef.current.moved
         dragRef.current.active = false
         if (!wasMoved) {
-          onSelect(pickNodeAtClient(e.clientX, e.clientY))
+          const hit = pickTargetAtClient(e.clientX, e.clientY)
+          if (hit?.kind === 'domain') {
+            const reg = layout2D.regions.get(hit.id)
+            if (reg) {
+              const targetZoom = clamp(
+                Math.min(size.width / (reg.rx * 2.4), size.height / (reg.ry * 2.5)),
+                fitTransform.zoom * 1.4,
+                3.6
+              )
+              animateToTransform({
+                zoom: targetZoom,
+                panX: size.width * 0.5 - reg.cx * targetZoom,
+                panY: (size.height + 40) * 0.5 - reg.cy * targetZoom
+              })
+            }
+            return
+          }
+          onSelect(hit?.kind === 'node' ? hit.id : null)
         }
       }}
       onDoubleClick={(e) => {
@@ -945,6 +1070,7 @@ export function FallbackConstellation({
       <canvas
         ref={canvasRef}
         className="fallback-2d-canvas"
+        style={{ cursor: hoveredId ? 'pointer' : undefined }}
         width={size.width}
         height={size.height}
       />

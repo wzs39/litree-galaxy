@@ -107,12 +107,31 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
     })
     expect(container.querySelector('[data-testid="graph-editor-panel"]')).toBeNull()
 
-    // Select node u1 -> StudyDrawer opens, Ctrl+K opens palette, Escape closes palette without clearing selectedId
+    // Select node u1 -> NodeActionMenu opens without blocking canvas with StudyDrawer
     act(() => {
       appStore.getState().selectNode('u1')
     })
+    expect(container.querySelector('[data-testid="node-action-menu"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="study-drawer"]')).toBeNull()
+
+    // Toggle subgraph isolation inside secondary menu
+    const isolateBtn = container.querySelector('[data-testid="menu-isolate-graph"]') as HTMLButtonElement
+    act(() => {
+      isolateBtn.click()
+    })
+    expect(isolateBtn.getAttribute('aria-pressed')).toBe('true')
+    act(() => {
+      isolateBtn.click()
+    })
+    expect(isolateBtn.getAttribute('aria-pressed')).toBe('false')
+
+    // Clicking "学习详情" in NodeActionMenu opens StudyDrawer
+    act(() => {
+      ;(container.querySelector('[data-testid="menu-open-drawer"]') as HTMLButtonElement).click()
+    })
     expect(container.querySelector('[data-testid="study-drawer"]')).not.toBeNull()
 
+    // Ctrl+K opens palette, Escape closes palette without clearing StudyDrawer or selectedId
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))
     })
@@ -182,7 +201,7 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
     })
 
     act(() => {
-      ;(container.querySelector('[data-testid="btn-start-focus"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="menu-start-focus"]') as HTMLButtonElement).click()
     })
     // Advance 1455s so remainingSec = 45 (< 60s)
     act(() => {
@@ -302,6 +321,9 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
 
     act(() => {
       appStore.getState().selectNode('u1')
+    })
+    act(() => {
+      ;(container.querySelector('[data-testid="menu-open-drawer"]') as HTMLButtonElement).click()
     })
     expect(container.querySelectorAll('[data-testid="study-drawer"]').length).toBe(1)
     expect(container.querySelector('[data-testid="drawer-title"]')?.textContent).toBe('单元一')

@@ -14,6 +14,7 @@ import { ConstellationRadar } from './ui/ConstellationRadar'
 import { FallbackConstellation } from './ui/FallbackConstellation'
 import { GraphEditorPanel } from './ui/GraphEditorPanel'
 import { HelpModal } from './ui/HelpModal'
+import { NodeActionMenu } from './ui/NodeActionMenu'
 import { ReviewRadarPanel } from './ui/ReviewRadarPanel'
 import { StudyDrawer } from './ui/StudyDrawer'
 import { ToastRegion, type ToastMessage } from './ui/ToastRegion'
@@ -86,6 +87,9 @@ export function App() {
   const [backupOpen, setBackupOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [isolateSubgraph, setIsolateSubgraph] = useState(false)
+  const [selectedAnchor, setSelectedAnchor] = useState<{ x: number; y: number } | null>(null)
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= 768 : false
   )
@@ -328,6 +332,7 @@ export function App() {
   const selectAndFly = useCallback(
     (nodeId: string) => {
       selectNode(nodeId)
+      setDrawerOpen(true)
       const offset = window.innerWidth > 768 ? 420 : 0
       if (engineRef.current) {
         engineRef.current.flyToNode(nodeId, { offsetRightPx: offset })
@@ -474,6 +479,15 @@ export function App() {
     }
   }, [focusTimer.nodeId, focusTimer.remainingSec, completeFocusSession, pushToast])
 
+  // Clear secondary menu / drawer states when selection clears
+  useEffect(() => {
+    if (selectedId === null) {
+      setDrawerOpen(false)
+      setIsolateSubgraph(false)
+      setSelectedAnchor(null)
+    }
+  }, [selectedId])
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -492,6 +506,8 @@ export function App() {
           setPaletteOpen(false)
         } else if (reviewOpen) {
           setReviewOpen(false)
+        } else if (drawerOpen) {
+          setDrawerOpen(false)
         } else if (selectedId !== null) {
           selectNode(null)
         }
@@ -520,7 +536,7 @@ export function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [helpOpen, backupOpen, paletteOpen, reviewOpen, selectedId, selectNode, setEditMode])
+  }, [helpOpen, backupOpen, paletteOpen, reviewOpen, drawerOpen, selectedId, selectNode, setEditMode])
 
   const handleResetView = useCallback(() => {
     if (engineRef.current) {
@@ -764,7 +780,8 @@ export function App() {
             resetToken={fallbackResetToken}
             lastBurstAt={lastBurstAt}
             panRequest={fallbackPanReq}
-            desktopDrawerOpen={selectedNode !== null}
+            desktopDrawerOpen={drawerOpen && selectedNode !== null}
+            isolateSubgraph={isolateSubgraph}
             showWebglFallbackBanner={webglUnavailableBanner}
             onSelect={(id) => {
               selectNode(id)
@@ -782,10 +799,17 @@ export function App() {
             }}
             onDrillDown={(id) => {
               const node = index.nodesById.get(id)
-              if (node && node.kind !== 'leaf') enterCluster(id)
+              if (!node) return
+              if (node.kind !== 'leaf') {
+                enterCluster(id)
+              } else {
+                selectNode(id)
+                setDrawerOpen(true)
+              }
             }}
             onHover={hoverNode}
             onViewportChange={setViewportNorm}
+            onSelectedAnchorChange={setSelectedAnchor}
           />
         ) : (
           <div className="fallback-2d-view" data-testid="fallback-2d-view">
@@ -853,8 +877,8 @@ export function App() {
               nodeStates={nodeStates}
               selectedId={selectedId}
               engine={engineInstance}
-              drawerOpen={selectedNode !== null}
-              offsetRightPx={selectedNode ? getDesktopDrawerOffset() : 0}
+              drawerOpen={drawerOpen && selectedNode !== null}
+              offsetRightPx={drawerOpen && selectedNode ? getDesktopDrawerOffset() : 0}
               onRadarClickNormalized={(nx, ny) =>
                 setFallbackPanReq((prev) => ({ nx, ny, zoomMul: 1, seq: (prev?.seq ?? 0) + 1 }))
               }
@@ -866,7 +890,7 @@ export function App() {
               dueIds={dueReviewIds}
               index={index}
               progress={progress}
-              drawerOpen={!isMobile && selectedNode !== null}
+              drawerOpen={!isMobile && drawerOpen && selectedNode !== null}
               onGradeReview={gradeReview}
               onSelectAndFly={selectAndFly}
               onClose={() => setReviewOpen(false)}
@@ -889,7 +913,50 @@ export function App() {
           )}
 
           <AnimatePresence>
-            {selectedNode && index && !(isMobile && reviewOpen) && (
+            {selectedNode &&
+              index &&
+              !paletteOpen &&
+              !backupOpen &&
+              !helpOpen &&
+              !(isMobile && reviewOpen) && (
+                <NodeActionMenu
+                  key="node-action-menu"
+                  node={selectedNode}
+                  index={index}
+                  visualState={nodeStates.get(selectedNode.id) ?? 'available'}
+                  anchor={
+                    selectedAnchor ?? {
+                      x: isMobile
+                        ? Math.round((typeof window !== 'undefined' ? window.innerWidth : 390) * 0.5) - 140
+                        : 260,
+                      y: 200
+                    }
+                  }
+                  isolateSubgraph={isolateSubgraph}
+                  drawerOpen={drawerOpen}
+                  onOpenDrawer={() => setDrawerOpen((v) => !v)}
+                  onDrillDown={(id) => {
+                    const target = index.nodesById.get(id)
+                    if (target && target.kind !== 'leaf') {
+                      enterCluster(id)
+                    } else {
+                      setDrawerOpen(true)
+                    }
+                  }}
+                  onToggleIsolate={() => setIsolateSubgraph((v) => !v)}
+                  onLight={(id) => void handleLight(id)}
+                  onUnlight={(id) => void unlightNode(id)}
+                  onStartFocus={(id) => {
+                    handleStartFocus(id, 25)
+                    setDrawerOpen(true)
+                  }}
+                  onClose={() => selectNode(null)}
+                />
+              )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {selectedNode && drawerOpen && index && !(isMobile && reviewOpen) && (
               <StudyDrawer
                 key="study-drawer"
                 node={selectedNode}
@@ -898,7 +965,7 @@ export function App() {
                 litLeaves={litLeaves}
                 focusTimer={focusTimer}
                 isMobile={isMobile}
-                onClose={() => selectNode(null)}
+                onClose={() => setDrawerOpen(false)}
                 onSelectAndFly={selectAndFly}
                 onEnterCluster={enterCluster}
                 onLight={handleLight}
