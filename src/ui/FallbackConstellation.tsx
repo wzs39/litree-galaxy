@@ -135,6 +135,26 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
 
+const FONT_STACK =
+  '"Inter", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif'
+
+function computeCanvasScale(quality: QualityPreset, viewW: number, viewH: number): number {
+  const nativeDpr =
+    typeof window !== 'undefined' &&
+    Number.isFinite(window.devicePixelRatio) &&
+    window.devicePixelRatio > 0
+      ? window.devicePixelRatio
+      : 1
+  const desired =
+    quality === 'eco'
+      ? clamp(nativeDpr, 1, 1.5)
+      : quality === 'high'
+        ? clamp(Math.max(nativeDpr, 2), 1, 3)
+        : clamp(Math.max(nativeDpr, 2), 1, 2.5)
+  const maxDim = Math.max(viewW, viewH, 1)
+  return Math.min(desired, Math.max(1, 7680 / maxDim))
+}
+
 export function FallbackConstellation({
   pack,
   index,
@@ -167,6 +187,7 @@ export function FallbackConstellation({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [size, setSize] = useState({ width: 1280, height: 800 })
+  const [nativeDprTick, setNativeDprTick] = useState(0)
   const [transform, setTransform] = useState(() => {
     const fallbackW = providedLayout?.worldWidth ?? 1800
     const fallbackH = providedLayout?.worldHeight ?? 1240
@@ -174,6 +195,11 @@ export function FallbackConstellation({
   })
   const [animTick, setAnimTick] = useState(0)
   const [hoverClientPos, setHoverClientPos] = useState<{ x: number; y: number } | null>(null)
+
+  const renderScale = useMemo(() => {
+    void nativeDprTick
+    return computeCanvasScale(quality, size.width, size.height)
+  }, [quality, size.width, size.height, nativeDprTick])
 
   const frameCountRef = useRef(1)
   const lastHoveredRef = useRef<string | null>(null)
@@ -193,6 +219,7 @@ export function FallbackConstellation({
 
   useEffect(() => {
     const updateSize = () => {
+      setNativeDprTick((t) => (t + 1) % 10000)
       const el = containerRef.current
       if (el && el.clientWidth > 0 && el.clientHeight > 0) {
         setSize({ width: el.clientWidth, height: el.clientHeight })
@@ -468,6 +495,13 @@ export function FallbackConstellation({
     if (!ctx) return
 
     frameCountRef.current += 1
+    if (typeof ctx.setTransform === 'function') {
+      ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0)
+    }
+    ctx.imageSmoothingEnabled = true
+    if ('imageSmoothingQuality' in ctx) {
+      ctx.imageSmoothingQuality = 'high'
+    }
     ctx.clearRect(0, 0, size.width, size.height)
 
     const isDaylight = theme === 'daylight'
@@ -720,7 +754,11 @@ export function FallbackConstellation({
           : focusNeighbors.unlockNodeIds.has(node2d.id)
             ? '#fbbf24'
             : '#ffffff'
-        ctx.lineWidth = (isDaylight ? 2 : 1.6) / transform.zoom
+        ctx.lineWidth = (isDaylight ? 2.1 : 1.75) / transform.zoom
+        ctx.stroke()
+      } else if (node2d.kind !== 'leaf' && visible && !isolatedDim) {
+        ctx.strokeStyle = isDaylight ? 'rgba(15, 23, 42, 0.24)' : 'rgba(226, 232, 240, 0.42)'
+        ctx.lineWidth = 1.15 / transform.zoom
         ctx.stroke()
       }
 
@@ -780,15 +818,17 @@ export function FallbackConstellation({
       if (!opts.force && (sx < -60 || sx > size.width + 60 || sy < 40 || sy > size.height - 20)) {
         return
       }
-      ctx.font = `${opts.bold ? '600 ' : ''}${opts.fontPx}px sans-serif`
+      const rx = Math.round(sx)
+      const ry = Math.round(sy)
+      ctx.font = `${opts.bold ? '600 ' : '500 '}${opts.fontPx}px ${FONT_STACK}`
       const estW = canMeasure ? ctx.measureText(text).width : text.length * opts.fontPx * 0.65
       const padX = opts.bgColor ? 8 : 3
-      const boxH = opts.fontPx + 8
+      const boxH = opts.fontPx + 9
       const box: LabelBox = {
-        x1: sx - padX,
-        y1: sy - boxH * 0.72,
-        x2: sx + estW + padX,
-        y2: sy + boxH * 0.35
+        x1: Math.round(rx - padX),
+        y1: Math.round(ry - boxH * 0.72),
+        x2: Math.round(rx + estW + padX),
+        y2: Math.round(ry + boxH * 0.35)
       }
       if (!opts.force && placedBoxes.some((b) => boxesOverlap(b, box))) {
         return
@@ -808,12 +848,12 @@ export function FallbackConstellation({
 
       if (opts.bgColor && canRoundRect && typeof ctx.fill === 'function') {
         ctx.save()
-        ctx.globalAlpha = 0.92
+        ctx.globalAlpha = 0.94
         ctx.fillStyle = opts.bgColor
         ctx.strokeStyle = opts.borderColor ?? 'transparent'
         ctx.lineWidth = 1
         ctx.beginPath()
-        ctx.roundRect(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1, 6)
+        ctx.roundRect(box.x1 + 0.5, box.y1 + 0.5, box.x2 - box.x1 - 1, box.y2 - box.y1 - 1, 6)
         ctx.fill()
         if (opts.borderColor) ctx.stroke()
         ctx.restore()
@@ -821,7 +861,7 @@ export function FallbackConstellation({
 
       ctx.globalAlpha = 1
       ctx.fillStyle = opts.textColor
-      ctx.fillText(text, sx, sy)
+      ctx.fillText(text, rx, ry)
     }
 
     // Priority 1: Focused/Selected/Hovered/Neighbor labels
@@ -845,22 +885,24 @@ export function FallbackConstellation({
           : ''
 
       tryDrawPillLabel(sx, sy, `${item.kn.title.zh}${unitLitSummary}`, {
-        fontPx: item.node2d.kind === 'branch' ? 12.5 : item.node2d.kind === 'unit' ? 11.5 : 10.5,
+        fontPx: item.node2d.kind === 'branch' ? 13 : item.node2d.kind === 'unit' ? 12 : 11,
         bold: item.isFocus || item.node2d.kind !== 'leaf',
-        textColor: isDaylight ? 'rgba(15, 23, 42, 0.92)' : 'rgba(226, 232, 240, 0.95)',
+        textColor: isDaylight ? 'rgba(15, 23, 42, 0.92)' : 'rgba(241, 245, 249, 0.98)',
         bgColor:
           item.isFocus || item.node2d.kind !== 'leaf'
             ? isDaylight
-              ? 'rgba(255, 255, 255, 0.9)'
-              : 'rgba(12, 18, 36, 0.88)'
-            : undefined,
+              ? 'rgba(255, 255, 255, 0.95)'
+              : 'rgba(10, 16, 32, 0.92)'
+            : isDaylight
+              ? 'rgba(255, 255, 255, 0.88)'
+              : 'rgba(10, 16, 32, 0.8)',
         borderColor: item.isFocus
           ? isDaylight
             ? '#0284c7'
             : '#38bdf8'
           : isDaylight
-            ? 'rgba(15, 23, 42, 0.16)'
-            : 'rgba(148, 163, 184, 0.28)',
+            ? 'rgba(15, 23, 42, 0.2)'
+            : 'rgba(148, 163, 184, 0.34)',
         force: item.isFocus,
         hitTarget: { id: item.node2d.id, kind: 'node' }
       })
@@ -873,10 +915,10 @@ export function FallbackConstellation({
         const rxScreen = region.cx * transform.zoom + transform.panX
         const ryScreen = (region.cy - region.ry * 0.88) * transform.zoom + transform.panY
         tryDrawPillLabel(rxScreen - 46, ryScreen, `✦ ${region.name} · ${region.unitCount}单元`, {
-          fontPx: 12,
+          fontPx: 12.5,
           bold: true,
           textColor: isDaylight ? 'rgba(15, 23, 42, 0.92)' : region.color,
-          bgColor: isDaylight ? 'rgba(255, 255, 255, 0.92)' : 'rgba(8, 13, 28, 0.9)',
+          bgColor: isDaylight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(8, 13, 28, 0.94)',
           borderColor: region.color,
           hitTarget: { id: region.domainId, kind: 'domain' }
         })
@@ -886,6 +928,7 @@ export function FallbackConstellation({
     layout2D,
     fitTransform,
     size,
+    renderScale,
     transform,
     nodeStates,
     selectedId,
@@ -1070,9 +1113,10 @@ export function FallbackConstellation({
       <canvas
         ref={canvasRef}
         className="fallback-2d-canvas"
+        data-dpr={renderScale}
         style={{ cursor: hoveredId ? 'pointer' : undefined }}
-        width={size.width}
-        height={size.height}
+        width={Math.round(size.width * renderScale)}
+        height={Math.round(size.height * renderScale)}
       />
 
       {hoveredInfo && hoverClientPos && !dragRef.current.active && (

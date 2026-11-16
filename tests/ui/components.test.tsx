@@ -791,6 +791,7 @@ describe('M3 UI Components & DOM Contracts', () => {
     const alphaByArc: number[] = []
     const origGetContext = HTMLCanvasElement.prototype.getContext
     const mockCtx = {
+      setTransform: vi.fn(),
       clearRect: vi.fn(),
       save: vi.fn(),
       restore: vi.fn(),
@@ -959,6 +960,13 @@ describe('M3 UI Components & DOM Contracts', () => {
       )
     })
     expect(onSelect).toHaveBeenCalledWith('u1')
+
+    // Backing canvas uses HiDPI/supersampling (>= 2x) for razor-sharp visuals
+    const canvasEl = container.querySelector('.fallback-2d-canvas') as HTMLCanvasElement
+    const dpr = Number(canvasEl.getAttribute('data-dpr'))
+    expect(dpr).toBeGreaterThanOrEqual(2)
+    expect(canvasEl.width).toBe(Math.round((window.innerWidth || 1024) * dpr))
+    expect(mockCtx.setTransform).toHaveBeenCalledWith(dpr, 0, 0, dpr, 0, 0)
 
     vi.restoreAllMocks()
   })

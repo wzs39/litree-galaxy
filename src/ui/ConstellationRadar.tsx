@@ -54,6 +54,12 @@ export function ConstellationRadar({
 }: ConstellationRadarProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const radarScale =
+    typeof window !== 'undefined' &&
+    Number.isFinite(window.devicePixelRatio) &&
+    window.devicePixelRatio > 0
+      ? Math.min(3, Math.max(window.devicePixelRatio, 2))
+      : 2
   const [viewportBox, setViewportBox] = useState<ViewportBox>({
     leftPct: 28,
     topPct: 28,
@@ -81,6 +87,9 @@ export function ConstellationRadar({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    if (typeof ctx.setTransform === 'function') {
+      ctx.setTransform(radarScale, 0, 0, radarScale, 0, 0)
+    }
     ctx.clearRect(0, 0, RADAR_W, RADAR_H)
 
     if (useSemantic2D && semanticLayout) {
@@ -251,8 +260,8 @@ export function ConstellationRadar({
       <canvas
         ref={canvasRef}
         className="radar-canvas"
-        width={RADAR_W}
-        height={RADAR_H}
+        width={Math.round(RADAR_W * radarScale)}
+        height={Math.round(RADAR_H * radarScale)}
       />
       <div
         className="radar-viewport"
