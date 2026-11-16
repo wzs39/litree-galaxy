@@ -37,6 +37,24 @@ describe('resources/packs/cs-math.json 回归 (pack-v2)', () => {
     expect(soft.length).toBe(411)
     expect(pack.edges.every((e) => typeof e.reason === 'string' && e.reason.length > 0)).toBe(true)
     expect(pack.routes.length).toBe(12)
+    expect(
+      leaves.every(
+        (l) =>
+          Array.isArray(l.resources) &&
+          l.resources.length >= 3 &&
+          typeof l.summary === 'string' &&
+          l.summary.length > 0
+      )
+    ).toBe(true)
+    expect(
+      branches.every(
+        (b) =>
+          Array.isArray(b.resources) &&
+          b.resources.length >= 2 &&
+          typeof b.summary === 'string' &&
+          b.summary.length > 0
+      )
+    ).toBe(true)
   })
 
   it('结构：11 个学科根、数学 3 lane 挂 M 下、13 个域', () => {

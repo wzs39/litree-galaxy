@@ -107,29 +107,27 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
     })
     expect(container.querySelector('[data-testid="graph-editor-panel"]')).toBeNull()
 
-    // Select node u1 -> NodeActionMenu opens without blocking canvas with StudyDrawer
+    // Select node u1 -> Tabbed StudyDrawer opens directly (no blocking middle popup)
     act(() => {
       appStore.getState().selectNode('u1')
     })
-    expect(container.querySelector('[data-testid="node-action-menu"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="study-drawer"]')).toBeNull()
-
-    // Toggle subgraph isolation inside secondary menu
-    const isolateBtn = container.querySelector('[data-testid="menu-isolate-graph"]') as HTMLButtonElement
-    act(() => {
-      isolateBtn.click()
-    })
-    expect(isolateBtn.getAttribute('aria-pressed')).toBe('true')
-    act(() => {
-      isolateBtn.click()
-    })
-    expect(isolateBtn.getAttribute('aria-pressed')).toBe('false')
-
-    // Clicking "学习详情" in NodeActionMenu opens StudyDrawer
-    act(() => {
-      ;(container.querySelector('[data-testid="menu-open-drawer"]') as HTMLButtonElement).click()
-    })
+    expect(container.querySelector('[data-testid="node-action-menu"]')).toBeNull()
     expect(container.querySelector('[data-testid="study-drawer"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="drawer-tabs"]')).not.toBeNull()
+
+    // Direct cluster drill-down displays floating cluster-nav-bar with back button
+    act(() => {
+      ;(container.querySelector('[data-testid="btn-enter-cluster"]') as HTMLButtonElement).click()
+    })
+    expect(appStore.getState().focusClusterId).toBe('u1')
+    expect(container.querySelector('[data-testid="cluster-nav-bar"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="btn-cluster-back"]')).not.toBeNull()
+
+    // Select a leaf opens its tabbed drawer with targeted resources; return to galaxy works cleanly
+    act(() => {
+      appStore.getState().selectNode('u1.k1')
+    })
+    expect(container.querySelector('[data-testid="drawer-resources-section"]')?.textContent).toContain('点一')
 
     // Ctrl+K opens palette, Escape closes palette without clearing StudyDrawer or selectedId
     act(() => {
@@ -141,6 +139,11 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
     })
     expect(container.querySelector('[data-testid="command-palette"]')).toBeNull()
     expect(container.querySelector('[data-testid="study-drawer"]')).not.toBeNull()
+
+    // Switch to practice tab for Markdown notes
+    act(() => {
+      ;(container.querySelector('[data-testid="tab-practice"]') as HTMLButtonElement).click()
+    })
 
     // Typing 'e' inside note-editor must NOT open graph-editor-panel
     const noteEl = container.querySelector('[data-testid="note-editor"]') as HTMLTextAreaElement
@@ -201,7 +204,7 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
     })
 
     act(() => {
-      ;(container.querySelector('[data-testid="menu-start-focus"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="btn-start-focus"]') as HTMLButtonElement).click()
     })
     // Advance 1455s so remainingSec = 45 (< 60s)
     act(() => {
@@ -321,9 +324,6 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
 
     act(() => {
       appStore.getState().selectNode('u1')
-    })
-    act(() => {
-      ;(container.querySelector('[data-testid="menu-open-drawer"]') as HTMLButtonElement).click()
     })
     expect(container.querySelectorAll('[data-testid="study-drawer"]').length).toBe(1)
     expect(container.querySelector('[data-testid="drawer-title"]')?.textContent).toBe('单元一')

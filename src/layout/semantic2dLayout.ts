@@ -146,19 +146,217 @@ export function computeSemantic2DLayout(
   index: GraphIndex,
   options?: Semantic2DOptions
 ): Semantic2DLayout {
-  const scaleFactor = clamp(Math.sqrt(Math.max(1, pack.nodes.length) / 80), 1, 5.2)
-  const worldWidth = Math.max(800, options?.worldWidth ?? Math.round(1800 * scaleFactor))
-  const worldHeight = Math.max(600, options?.worldHeight ?? Math.round(1240 * scaleFactor))
-
   const focusIds =
     options?.focusClusterId !== undefined && options.focusClusterId !== null
       ? collectSubtreeIds(options.focusClusterId, index)
       : null
 
   const visibleNodes = pack.nodes.filter((n) => !focusIds || focusIds.has(n.id))
+  const scaleSourceCount = focusIds ? visibleNodes.length : pack.nodes.length
+  const scaleFactor = clamp(
+    Math.sqrt(Math.max(1, scaleSourceCount) / (focusIds ? 45 : 80)),
+    focusIds ? 0.8 : 1,
+    5.2
+  )
+  const worldWidth = Math.max(800, options?.worldWidth ?? Math.round(1800 * scaleFactor))
+  const worldHeight = Math.max(600, options?.worldHeight ?? Math.round(1240 * scaleFactor))
   const visibleIdSet = new Set(visibleNodes.map((n) => n.id))
   const topoRank = computeTopologicalRanks(visibleIdSet, pack)
 
+  const regions = new Map<string, SemanticDomainRegion>()
+  const rawPositions = new Map<string, { x: number; y: number; radius: number; kind: NodeKind; domainId: string }>()
+  const syntheticEdges: SemanticEdge2D[] = []
+
+  const focusRootNode =
+    focusIds && options?.focusClusterId ? index.nodesById.get(options.focusClusterId) : undefined
+
+  if (focusIds && focusRootNode) {
+    const def = pack.domains.find((d) => d.id === focusRootNode.domainId)
+    regions.set(focusRootNode.domainId, {
+      domainId: focusRootNode.domainId,
+      name: def?.name ?? focusRootNode.domainId,
+      color: def?.color ?? '#38bdf8',
+      cx: worldWidth * 0.5,
+      cy: worldHeight * 0.5,
+      nx: 0.5,
+      ny: 0.5,
+      rx: worldWidth * 0.44,
+      ry: worldHeight * 0.42,
+      nodeCount: visibleNodes.length,
+      unitCount: visibleNodes.filter((n) => n.kind === 'unit').length,
+      leafCount: visibleNodes.filter((n) => n.kind === 'leaf').length
+    })
+
+    rawPositions.set(focusRootNode.id, {
+      x: worldWidth * 0.5,
+      y: 88,
+      radius: focusRootNode.kind === 'branch' ? 14 : 11,
+      kind: focusRootNode.kind,
+      domainId: focusRootNode.domainId
+    })
+
+    const subBranches = visibleNodes
+      .filter((n) => n.id !== focusRootNode.id && n.kind === 'branch')
+      .sort((a, b) => compareId(a.id, b.id))
+    const subUnits = visibleNodes
+      .filter((n) => n.id !== focusRootNode.id && n.kind === 'unit')
+      .sort((a, b) => compareId(a.id, b.id))
+    const subLeaves = visibleNodes
+      .filter((n) => n.id !== focusRootNode.id && n.kind === 'leaf')
+      .sort((a, b) => compareId(a.id, b.id))
+
+    if (subUnits.length > 0) {
+      // Branch/Lane focus view: arrange child sub-branches top band & units cleanly across whole viewport
+      subBranches.forEach((br, idx) => {
+        const ratio = subBranches.length <= 1 ? 0.5 : idx / (subBranches.length - 1)
+        rawPositions.set(br.id, {
+          x: worldWidth * (0.14 + ratio * 0.72),
+          y: 168 + (idx % 2) * 32,
+          radius: 11,
+          kind: 'branch',
+          domainId: br.domainId
+        })
+      })
+
+      const cols = clamp(Math.ceil(Math.sqrt(subUnits.length * 1.35)), 2, 5)
+      const rows = Math.max(1, Math.ceil(subUnits.length / cols))
+      const padX = 150
+      const startY = subBranches.length > 0 ? 256 : 190
+      const availW = Math.max(240, worldWidth - padX * 2)
+      const availH = Math.max(240, worldHeight - startY - 90)
+      const stepX = cols <= 1 ? 0 : availW / (cols - 1)
+      const stepY = rows <= 1 ? 0 : availH / (rows - 1)
+
+      subUnits.forEach((u, uIdx) => {
+        const col = uIdx % cols
+        const row = Math.floor(uIdx / cols)
+        const ux = cols <= 1 ? worldWidth * 0.5 : padX + col * stepX
+        const uy = rows <= 1 ? startY + availH * 0.35 : startY + row * stepY
+        rawPositions.set(u.id, {
+          x: ux,
+          y: uy,
+          radius: 9.5,
+          kind: 'unit',
+          domainId: u.domainId
+        })
+      })
+
+      // Cluster any leaves around their owning unit/branch cleanly
+      const leavesByParent = new Map<string, KnowledgeNode[]>()
+      for (const lf of subLeaves) {
+        const pKey = lf.parentId && rawPositions.has(lf.parentId) ? lf.parentId : focusRootNode.id
+        const list = leavesByParent.get(pKey)
+        if (list) list.push(lf)
+        else leavesByParent.set(pKey, [lf])
+      }
+      for (const [pKey, group] of leavesByParent) {
+        const anchor = rawPositions.get(pKey)!
+        const span = Math.min(86, 26 + Math.sqrt(group.length) * 10)
+        group.forEach((lf, k) => {
+          const ang = (k / Math.max(1, group.length)) * Math.PI * 2
+          const dist = 20 + (k % 3) * (span / 3)
+          rawPositions.set(lf.id, {
+            x: clamp(anchor.x + Math.cos(ang) * dist, 40, worldWidth - 40),
+            y: clamp(anchor.y + Math.sin(ang) * dist, 60, worldHeight - 40),
+            radius: lf.core ? 5 : 4,
+            kind: 'leaf',
+            domainId: lf.domainId
+          })
+        })
+      }
+    } else if (subBranches.length > 0) {
+      // Unit focus view with chapters (c0, c1, ...): crisp readable columns of chapters & leaf rows
+      const cols = clamp(subBranches.length, 1, 4)
+      const rows = Math.ceil(subBranches.length / cols)
+      const padX = 110
+      const startY = 175
+      const cellW = (worldWidth - padX * 2) / cols
+      const cellH = Math.max(180, (worldHeight - startY - 60) / rows)
+
+      subBranches.forEach((ch, idx) => {
+        const col = idx % cols
+        const row = Math.floor(idx / cols)
+        const chX = padX + col * cellW + cellW * 0.22
+        const chY = startY + row * cellH
+        rawPositions.set(ch.id, {
+          x: chX,
+          y: chY,
+          radius: 10,
+          kind: 'branch',
+          domainId: ch.domainId
+        })
+
+        const chLeaves = subLeaves.filter((lf) => lf.parentId === ch.id)
+        const leafCols = chLeaves.length > 7 ? 2 : 1
+        const leafStepY = clamp((cellH - 52) / Math.max(1, Math.ceil(chLeaves.length / leafCols)), 28, 46)
+        chLeaves.forEach((lf, k) => {
+          const lCol = Math.floor(k / Math.ceil(chLeaves.length / leafCols))
+          const lRow = k % Math.ceil(chLeaves.length / leafCols)
+          rawPositions.set(lf.id, {
+            x: chX + lCol * Math.min(230, cellW * 0.46),
+            y: chY + 42 + lRow * leafStepY,
+            radius: lf.core ? 5.6 : 4.6,
+            kind: 'leaf',
+            domainId: lf.domainId
+          })
+        })
+      })
+
+      // Any direct orphan leaves under unit
+      const placedLeaves = subLeaves.filter((lf) => !rawPositions.has(lf.id))
+      placedLeaves.forEach((lf, k) => {
+        rawPositions.set(lf.id, {
+          x: padX + (k % 3) * 280,
+          y: worldHeight - 90 - Math.floor(k / 3) * 38,
+          radius: lf.core ? 5.6 : 4.6,
+          kind: 'leaf',
+          domainId: lf.domainId
+        })
+      })
+    } else if (subLeaves.length > 0) {
+      // Chapter or small unit focus view: spacious readable grid of all leaves
+      const cols = clamp(Math.ceil(Math.sqrt(subLeaves.length * 1.4)), 1, 4)
+      const rows = Math.max(1, Math.ceil(subLeaves.length / cols))
+      const padX = Math.max(140, worldWidth * 0.14)
+      const startY = 185
+      const availW = Math.max(220, worldWidth - padX * 2)
+      const availH = Math.max(200, worldHeight - startY - 90)
+      const stepX = cols <= 1 ? 0 : availW / (cols - 1)
+      const stepY = rows <= 1 ? 0 : clamp(availH / (rows - 1), 46, 96)
+
+      subLeaves.forEach((lf, k) => {
+        const col = k % cols
+        const row = Math.floor(k / cols)
+        rawPositions.set(lf.id, {
+          x: cols <= 1 ? worldWidth * 0.42 : padX + col * stepX,
+          y: rows <= 1 ? startY + availH * 0.25 : startY + row * stepY,
+          radius: lf.core ? 6.2 : 5.2,
+          kind: 'leaf',
+          domainId: lf.domainId
+        })
+      })
+    }
+
+    // Add lightweight hierarchy guide edges inside focused subtree so parent-child structure reads clearly
+    for (const n of visibleNodes) {
+      if (n.id === focusRootNode.id) continue
+      const pId = n.parentId && rawPositions.has(n.parentId) ? n.parentId : focusRootNode.id
+      const fromPos = rawPositions.get(pId)
+      const toPos = rawPositions.get(n.id)
+      if (fromPos && toPos && pId !== n.id) {
+        syntheticEdges.push({
+          id: `__tree_${pId}_${n.id}`,
+          from: pId,
+          to: n.id,
+          type: 'related',
+          x1: fromPos.x,
+          y1: fromPos.y,
+          x2: toPos.x,
+          y2: toPos.y
+        })
+      }
+    }
+  } else {
   // Group visible nodes by domain
   const domainGroups = new Map<string, KnowledgeNode[]>()
   for (const d of pack.domains) {
@@ -184,9 +382,6 @@ export function computeSemantic2DLayout(
         nodes: list.sort((a, b) => compareId(a.id, b.id))
       }
     })
-
-  const regions = new Map<string, SemanticDomainRegion>()
-  const rawPositions = new Map<string, { x: number; y: number; radius: number; kind: NodeKind; domainId: string }>()
 
   const count = Math.max(1, activeDomains.length)
   const cols = count === 1 ? 1 : count <= 2 ? 2 : count <= 6 ? 3 : 4
@@ -306,6 +501,7 @@ export function computeSemantic2DLayout(
       })
     }
   })
+  }
 
   // Apply explicit layoutOverride coordinates if user edited/repositioned nodes
   for (const node of visibleNodes) {
@@ -356,6 +552,21 @@ export function computeSemantic2DLayout(
       from: edge.from,
       to: edge.to,
       type: edge.type,
+      x1: fromNode.x,
+      y1: fromNode.y,
+      x2: toNode.x,
+      y2: toNode.y
+    })
+  }
+  for (const se of syntheticEdges) {
+    const fromNode = nodes.get(se.from)
+    const toNode = nodes.get(se.to)
+    if (!fromNode || !toNode) continue
+    edges.push({
+      id: se.id,
+      from: se.from,
+      to: se.to,
+      type: se.type,
       x1: fromNode.x,
       y1: fromNode.y,
       x2: toNode.x,

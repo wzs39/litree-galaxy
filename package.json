@@ -16,7 +16,8 @@
     "test:e2e": "playwright test",
     "verify": "npm run typecheck && npm test && npm run build && npm run test:e2e",
     "convert:csmath": "node scripts/convert-csmath.mjs",
-    "augment:csmath": "node scripts/augment-csmath.mjs"
+    "augment:csmath": "node scripts/augment-csmath.mjs",
+    "enrich:leaves": "node scripts/enrich-leaf-resources.mjs"
   },
   "dependencies": {
     "framer-motion": "^14.14.0",

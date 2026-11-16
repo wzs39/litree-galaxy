@@ -67,5 +67,7 @@ describe('semantic2dLayout', () => {
     expect(focused.nodes.has('M.1.1')).toBe(true)
     expect(focused.nodes.has('M.1.1.k0')).toBe(true)
     expect(focused.nodes.has('X')).toBe(false)
+    expect(focused.worldWidth).toBeLessThan(3000)
+    expect(focused.edges.some((e) => e.id.startsWith('__tree_'))).toBe(true)
   })
 })

@@ -14,7 +14,6 @@ import { ConstellationRadar } from './ui/ConstellationRadar'
 import { FallbackConstellation } from './ui/FallbackConstellation'
 import { GraphEditorPanel } from './ui/GraphEditorPanel'
 import { HelpModal } from './ui/HelpModal'
-import { NodeActionMenu } from './ui/NodeActionMenu'
 import { ReviewRadarPanel } from './ui/ReviewRadarPanel'
 import { StudyDrawer } from './ui/StudyDrawer'
 import { ToastRegion, type ToastMessage } from './ui/ToastRegion'
@@ -89,7 +88,6 @@ export function App() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [isolateSubgraph, setIsolateSubgraph] = useState(false)
-  const [selectedAnchor, setSelectedAnchor] = useState<{ x: number; y: number } | null>(null)
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= 768 : false
   )
@@ -479,12 +477,13 @@ export function App() {
     }
   }, [focusTimer.nodeId, focusTimer.remainingSec, completeFocusSession, pushToast])
 
-  // Clear secondary menu / drawer states when selection clears
+  // Open drawer cleanly whenever a node is selected; reset when selection clears
   useEffect(() => {
     if (selectedId === null) {
       setDrawerOpen(false)
       setIsolateSubgraph(false)
-      setSelectedAnchor(null)
+    } else {
+      setDrawerOpen(true)
     }
   }, [selectedId])
 
@@ -506,10 +505,10 @@ export function App() {
           setPaletteOpen(false)
         } else if (reviewOpen) {
           setReviewOpen(false)
-        } else if (drawerOpen) {
-          setDrawerOpen(false)
         } else if (selectedId !== null) {
           selectNode(null)
+        } else if (viewLevel !== 'galaxy') {
+          stepBack()
         }
         return
       }
@@ -536,7 +535,7 @@ export function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [helpOpen, backupOpen, paletteOpen, reviewOpen, drawerOpen, selectedId, selectNode, setEditMode])
+  }, [helpOpen, backupOpen, paletteOpen, reviewOpen, selectedId, viewLevel, selectNode, stepBack, setEditMode])
 
   const handleResetView = useCallback(() => {
     if (engineRef.current) {
@@ -784,14 +783,31 @@ export function App() {
             isolateSubgraph={isolateSubgraph}
             showWebglFallbackBanner={webglUnavailableBanner}
             onSelect={(id) => {
+              if (!id) {
+                selectNode(null)
+                return
+              }
+              const clickedNode = index.nodesById.get(id)
+              const hasChildren = (index.childrenByParent.get(id)?.length ?? 0) > 0
+              if (
+                clickedNode &&
+                clickedNode.kind !== 'leaf' &&
+                hasChildren &&
+                id !== focusClusterId
+              ) {
+                // Direct 1-click drill-down into child modules / leaves without blocking popup
+                enterCluster(id)
+                selectNode(null)
+                return
+              }
               selectNode(id)
-              if (id && semanticLayout) {
+              if (semanticLayout) {
                 const n2d = semanticLayout.nodes.get(id)
                 if (n2d) {
                   setFallbackPanReq((prev) => ({
                     nx: n2d.nx,
                     ny: n2d.ny,
-                    zoomMul: n2d.kind === 'leaf' ? 2.4 : 1.5,
+                    zoomMul: n2d.kind === 'leaf' ? 1.85 : 1.35,
                     seq: (prev?.seq ?? 0) + 1
                   }))
                 }
@@ -800,16 +816,15 @@ export function App() {
             onDrillDown={(id) => {
               const node = index.nodesById.get(id)
               if (!node) return
-              if (node.kind !== 'leaf') {
+              if (node.kind !== 'leaf' && (index.childrenByParent.get(id)?.length ?? 0) > 0) {
                 enterCluster(id)
+                selectNode(null)
               } else {
                 selectNode(id)
-                setDrawerOpen(true)
               }
             }}
             onHover={hoverNode}
             onViewportChange={setViewportNorm}
-            onSelectedAnchorChange={setSelectedAnchor}
           />
         ) : (
           <div className="fallback-2d-view" data-testid="fallback-2d-view">
@@ -912,48 +927,63 @@ export function App() {
             />
           )}
 
-          <AnimatePresence>
-            {selectedNode &&
-              index &&
-              !paletteOpen &&
-              !backupOpen &&
-              !helpOpen &&
-              !(isMobile && reviewOpen) && (
-                <NodeActionMenu
-                  key="node-action-menu"
-                  node={selectedNode}
-                  index={index}
-                  visualState={nodeStates.get(selectedNode.id) ?? 'available'}
-                  anchor={
-                    selectedAnchor ?? {
-                      x: isMobile
-                        ? Math.round((typeof window !== 'undefined' ? window.innerWidth : 390) * 0.5) - 140
-                        : 260,
-                      y: 200
-                    }
-                  }
-                  isolateSubgraph={isolateSubgraph}
-                  drawerOpen={drawerOpen}
-                  onOpenDrawer={() => setDrawerOpen((v) => !v)}
-                  onDrillDown={(id) => {
-                    const target = index.nodesById.get(id)
-                    if (target && target.kind !== 'leaf') {
-                      enterCluster(id)
-                    } else {
-                      setDrawerOpen(true)
-                    }
+          {viewLevel !== 'galaxy' && focusClusterId && index && (() => {
+            const clusterNode = index.nodesById.get(focusClusterId)
+            if (!clusterNode) return null
+            const leavesInCluster = index.leavesOf(focusClusterId)
+            const litInCluster = leavesInCluster.filter((l) => litLeaves.has(l.id)).length
+            return (
+              <div className="cluster-nav-bar hud-panel" data-testid="cluster-nav-bar">
+                <button
+                  type="button"
+                  className="hud-btn"
+                  data-testid="btn-cluster-back"
+                  onClick={() => {
+                    selectNode(null)
+                    stepBack()
                   }}
-                  onToggleIsolate={() => setIsolateSubgraph((v) => !v)}
-                  onLight={(id) => void handleLight(id)}
-                  onUnlight={(id) => void unlightNode(id)}
-                  onStartFocus={(id) => {
-                    handleStartFocus(id, 25)
-                    setDrawerOpen(true)
+                >
+                  <span>← 返回上一级</span>
+                </button>
+                <span className="cluster-nav-title">
+                  {clusterNode.title.zh}
+                  {leavesInCluster.length > 0 && (
+                    <span className="cluster-nav-progress">
+                      {' '}
+                      · {litInCluster}/{leavesInCluster.length}
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="hud-btn primary"
+                  data-testid="btn-cluster-details"
+                  onClick={() => selectNode(focusClusterId)}
+                >
+                  <span>本节资料</span>
+                </button>
+                <button
+                  type="button"
+                  className={`hud-btn ${isolateSubgraph ? 'active' : ''}`}
+                  data-testid="btn-cluster-isolate"
+                  onClick={() => setIsolateSubgraph((v) => !v)}
+                >
+                  <span>{isolateSubgraph ? '显示全局边' : '只看关联链'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="hud-btn"
+                  data-testid="btn-cluster-galaxy"
+                  onClick={() => {
+                    selectNode(null)
+                    handleResetToGalaxy()
                   }}
-                  onClose={() => selectNode(null)}
-                />
-              )}
-          </AnimatePresence>
+                >
+                  <span>全景</span>
+                </button>
+              </div>
+            )
+          })()}
 
           <AnimatePresence>
             {selectedNode && drawerOpen && index && !(isMobile && reviewOpen) && (
@@ -965,7 +995,9 @@ export function App() {
                 litLeaves={litLeaves}
                 focusTimer={focusTimer}
                 isMobile={isMobile}
-                onClose={() => setDrawerOpen(false)}
+                isolateSubgraph={isolateSubgraph}
+                onToggleIsolate={() => setIsolateSubgraph((v) => !v)}
+                onClose={() => selectNode(null)}
                 onSelectAndFly={selectAndFly}
                 onEnterCluster={enterCluster}
                 onLight={handleLight}

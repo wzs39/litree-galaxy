@@ -768,8 +768,8 @@ export function FallbackConstellation({
           isHovered ||
           isNeighbor ||
           node2d.kind === 'branch' ||
-          (node2d.kind === 'unit' && (relZoom >= 0.85 || layout2D.nodes.size <= 160)) ||
-          (node2d.kind === 'leaf' && (relZoom >= 2.2 || layout2D.nodes.size <= 40))
+          (node2d.kind === 'unit' && (viewLevel !== 'galaxy' || relZoom >= 0.85 || layout2D.nodes.size <= 160)) ||
+          (node2d.kind === 'leaf' && (viewLevel !== 'galaxy' || relZoom >= 2.2 || layout2D.nodes.size <= 40))
 
         if (showLabelByLod && visible) {
           nodesToLabel.push({
@@ -908,8 +908,8 @@ export function FallbackConstellation({
       })
     }
 
-    // Priority 2: Domain Nebula Region Headers (drawn smoothly at top of each region & clickable to zoom into region)
-    if (canMeasure && relZoom < 3.4) {
+    // Priority 2: Domain Nebula Region Headers (Galaxy overview only)
+    if (canMeasure && viewLevel === 'galaxy' && relZoom < 3.4) {
       for (const region of layout2D.regions.values()) {
         if (domainFilter && !domainFilter.has(region.domainId)) continue
         const rxScreen = region.cx * transform.zoom + transform.panX
@@ -1070,6 +1070,10 @@ export function FallbackConstellation({
         if (!wasMoved) {
           const hit = pickTargetAtClient(e.clientX, e.clientY)
           if (hit?.kind === 'domain') {
+            if (index.nodesById.has(hit.id) && (index.childrenByParent.get(hit.id)?.length ?? 0) > 0) {
+              onDrillDown(hit.id)
+              return
+            }
             const reg = layout2D.regions.get(hit.id)
             if (reg) {
               const targetZoom = clamp(
@@ -1145,9 +1149,11 @@ export function FallbackConstellation({
           <div className="node-hover-meta">
             <span>前置 {hoveredInfo.prereqCount}</span>
             <span>解锁 {hoveredInfo.dependentCount}</span>
-            {hoveredInfo.kn.estimatedMinutes ? (
-              <span>约 {hoveredInfo.kn.estimatedMinutes} 分钟</span>
-            ) : null}
+            {(index.childrenByParent.get(hoveredInfo.kn.id)?.length ?? 0) > 0 ? (
+              <span>点击进入下级 ({index.childrenByParent.get(hoveredInfo.kn.id)!.length})</span>
+            ) : (
+              <span>点击查看资料</span>
+            )}
           </div>
         </div>
       )}
