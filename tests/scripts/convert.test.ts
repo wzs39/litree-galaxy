@@ -2,8 +2,26 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { convertCsmath } from '../../scripts/convert-csmath.mjs'
-import { validatePack } from '../../src/renderer/core/schema'
+import { convertCsmath as convertCsmathRaw } from '../../scripts/convert-csmath.mjs'
+import { normalizePackToV2 } from '../../src/core/schema'
+import type { PackV1 } from '../../src/core/types'
+
+interface ConvertResult {
+  pack: PackV1
+  report: {
+    units: number
+    hard: number
+    soft: number
+    leaves: number
+    chapters: number
+    diffs: string[]
+  }
+}
+
+const convertCsmath = convertCsmathRaw as (
+  skilltree: unknown,
+  outlines: Record<string, unknown>
+) => ConvertResult
 
 const here = dirname(fileURLToPath(import.meta.url))
 const sample = JSON.parse(readFileSync(join(here, '../fixtures/csmath-sample.json'), 'utf-8'))
@@ -11,8 +29,8 @@ const sample = JSON.parse(readFileSync(join(here, '../fixtures/csmath-sample.jso
 describe('convertCsmath（以真实结构截取的 fixture 为准）', () => {
   const { pack, report } = convertCsmath(sample.skilltree, sample.outlines)
 
-  it('输出通过 validatePack', () => {
-    const r = validatePack(JSON.parse(JSON.stringify(pack)))
+  it('输出通过 normalizePackToV2', () => {
+    const r = normalizePackToV2(JSON.parse(JSON.stringify(pack)))
     if (!r.ok) throw new Error('校验失败: ' + r.errors.join('; '))
     expect(r.ok).toBe(true)
   })
@@ -51,22 +69,7 @@ describe('convertCsmath（以真实结构截取的 fixture 为准）', () => {
   })
 
   it('>20 知识点的单元保留章分组层；≤20 直接挂单元', () => {
-    // 构造 >20 的输入
     const big = JSON.parse(JSON.stringify(sample.skilltree)) as never
-    const ol = {
-      'M.1.1': {
-        sources: [],
-        outline: [
-          {
-            src: 'A',
-            ref: '1',
-            title: 'Ch1',
-            zh: '第一章',
-            items: Array.from({ length: 21 }, (_, i) => ({ ref: '', title: `t${i}`, zh: `点${i}` }))
-          }
-        ]
-      }
-    }
     const r2 = convertCsmath(big, {
       'M.1.1': {
         sources: [],
@@ -91,7 +94,6 @@ describe('convertCsmath（以真实结构截取的 fixture 为准）', () => {
     expect(r2.report.leaves).toBe(24)
     const chapter = r2.pack.nodes.find((n) => n.parent === 'M.1.1')
     expect(chapter?.kind).toBe('branch')
-    // ≤20：sample 中 M.1.2 的叶子直接挂在单元下
     const m12leaves = r2.pack.nodes.filter((n) => n.kind === 'leaf' && n.parent === 'M.1.2')
     expect(m12leaves.length).toBeGreaterThan(0)
     const m12chapters = r2.pack.nodes.filter(

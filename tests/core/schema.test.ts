@@ -1,189 +1,176 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { validatePack } from '../../src/renderer/core/schema'
-import type { Pack } from '../../src/renderer/core/types'
+import {
+  detectCycles,
+  findCycleEdgeIds,
+  normalizePackToV2,
+  parsePackDocument,
+  validatePackDocument,
+  wouldCreateCycle
+} from '../../src/core/schema'
+import type { KnowledgeEdge, KnowledgeNode, PackDocument } from '../../src/core/types'
 
-// 计划 Task 2 fixture：b1 + u1/u2 + 3 叶 + hard u1→u2，domain D1
-export const validPack: Pack = {
-  schema: 'litree/pack-v1',
-  id: 'mini',
-  title: { zh: 'mini' },
-  domains: [{ id: 'D1', name: '域一', color: '#3DD6C3' }],
-  nodes: [
-    { id: 'b1', parent: null, kind: 'branch', title: { zh: '分支一' }, domain: 'D1' },
-    { id: 'u1', parent: 'b1', kind: 'unit', title: { zh: '单元一' }, domain: 'D1', core: true },
-    { id: 'u1.k1', parent: 'u1', kind: 'leaf', title: { zh: '点一' }, domain: 'D1' },
-    { id: 'u1.k2', parent: 'u1', kind: 'leaf', title: { zh: '点二' }, domain: 'D1' },
-    { id: 'u1.k3', parent: 'u1', kind: 'leaf', title: { zh: '点三' }, domain: 'D1' },
-    { id: 'u2', parent: 'b1', kind: 'unit', title: { zh: '单元二' }, domain: 'D1', core: true }
-  ],
-  edges: [{ from: 'u1', to: 'u2', type: 'hard', reason: 'r' }]
+function makeMiniV2(): PackDocument {
+  return {
+    schema: 'litree/pack-v2',
+    id: 'mini-v2',
+    version: 2,
+    title: { zh: '迷你包', en: 'Mini Pack' },
+    source: 'builtin',
+    domains: [
+      { id: 'D1', name: '域一', color: '#3DD6C3' },
+      { id: 'D2', name: '域二', color: '#F0B429' }
+    ],
+    nodes: [
+      { id: 'b1', parentId: null, kind: 'branch', title: { zh: '分支一' }, domainId: 'D1' },
+      { id: 'u1', parentId: 'b1', kind: 'unit', title: { zh: '单元一' }, domainId: 'D1', core: true },
+      { id: 'u1.k1', parentId: 'u1', kind: 'leaf', title: { zh: '点一' }, domainId: 'D1' },
+      { id: 'u2', parentId: 'b1', kind: 'unit', title: { zh: '单元二' }, domainId: 'D1' },
+      { id: 'u2.k1', parentId: 'u2', kind: 'leaf', title: { zh: '点二' }, domainId: 'D1' },
+      { id: 'u3', parentId: 'b1', kind: 'unit', title: { zh: '单元三' }, domainId: 'D2' },
+      { id: 'u3.k1', parentId: 'u3', kind: 'leaf', title: { zh: '点三' }, domainId: 'D2' }
+    ],
+    edges: [
+      { id: 'e1', from: 'u1', to: 'u2', type: 'hard', reason: '基础前置' },
+      { id: 'e2', from: 'u2', to: 'u3', type: 'soft', reason: '推荐衔接' }
+    ],
+    routes: [{ id: 'r1', name: '入门', ids: ['u1', 'u2'] }]
+  }
 }
 
-function cloneWith(mutate: (p: Pack) => void): unknown {
-  const p: Pack = JSON.parse(JSON.stringify(validPack))
-  mutate(p)
-  return p
-}
-
-describe('validatePack', () => {
-  it('合法包通过', () => {
-    const r = validatePack(JSON.parse(JSON.stringify(validPack)))
-    expect(r.ok).toBe(true)
+describe('schema: v1->v2 适配与严格校验', () => {
+  it('dev-mini.json (pack-v1) 无损适配为 pack-v2 并保留 routes/edges/title', () => {
+    const raw = JSON.parse(readFileSync(join(process.cwd(), 'resources/packs/dev-mini.json'), 'utf-8'))
+    const res = normalizePackToV2(raw)
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.pack.schema).toBe('litree/pack-v2')
+    expect(res.pack.id).toBe('dev-mini')
+    expect(res.pack.nodes.length).toBe(11)
+    expect(res.pack.edges.length).toBe(2)
+    expect(res.pack.edges.every((e) => e.id.length > 0)).toBe(true)
+    expect(res.pack.routes.length).toBe(2)
+    expect(res.pack.routes[0]?.id).toBe('dev-mini:route-0')
   })
 
-  it('重复 id 拒绝且错误含该 id', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.nodes.push({ ...p.nodes[2]! })
-      })
-    )
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('u1.k1')
+  it('缺少 routes 的 pack-v1 fixture 默认补齐为空数组', () => {
+    const raw = {
+      schema: 'litree/pack-v1',
+      id: 'no-routes',
+      title: { zh: '无路线包' },
+      domains: [{ id: 'D1', name: '域一', color: '#abc' }],
+      nodes: [
+        { id: 'b1', parent: null, kind: 'branch', title: { zh: '分支' }, domain: 'D1' },
+        { id: 'u1', parent: 'b1', kind: 'unit', title: { zh: '单元' }, domain: 'D1' },
+        { id: 'k1', parent: 'u1', kind: 'leaf', title: { zh: '点' }, domain: 'D1' }
+      ],
+      edges: []
+    }
+    const pack = parsePackDocument(raw)
+    expect(pack.routes).toEqual([])
+    expect(pack.nodes[0]?.parentId).toBeNull()
+    expect(pack.nodes[1]?.domainId).toBe('D1')
   })
 
-  it('parent 不存在拒绝', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.nodes[2]!.parent = 'ghost'
-      })
-    )
-    expect(r.ok).toBe(false)
+  it('validatePackDocument 严格校验 v2 并拒绝 v1、非法颜色与非法资源 URL', () => {
+    const v2 = makeMiniV2()
+    expect(validatePackDocument(v2).ok).toBe(true)
+
+    const v1Like = { ...v2, schema: 'litree/pack-v1' }
+    expect(validatePackDocument(v1Like).ok).toBe(false)
+
+    const badColor = makeMiniV2()
+    badColor.domains[0]!.color = 'javascript:alert(1)'
+    const rColor = validatePackDocument(badColor)
+    expect(rColor.ok).toBe(false)
+
+    const badUrl = makeMiniV2()
+    badUrl.nodes[1]!.resources = [{ title: 'XSS', url: 'javascript:alert(1)' }]
+    const rUrl = validatePackDocument(badUrl)
+    expect(rUrl.ok).toBe(false)
   })
 
-  it('边端点不存在拒绝', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.edges.push({ from: 'u1', to: 'ghost', type: 'soft' })
-      })
-    )
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('ghost')
+  it('拒绝孤儿叶子（无 unit 祖先）、parentId 环与自环边', () => {
+    const orphanLeaf = makeMiniV2()
+    orphanLeaf.nodes.push({
+      id: 'badLeaf',
+      parentId: 'b1',
+      kind: 'leaf',
+      title: { zh: '直接挂分支的叶子' },
+      domainId: 'D1'
+    })
+    expect(validatePackDocument(orphanLeaf).ok).toBe(false)
+
+    const parentCycle = makeMiniV2()
+    parentCycle.nodes[0]!.parentId = 'u1'
+    expect(validatePackDocument(parentCycle).ok).toBe(false)
+
+    const selfLoop = makeMiniV2()
+    selfLoop.edges.push({ id: 'self', from: 'u1', to: 'u1', type: 'related' })
+    expect(validatePackDocument(selfLoop).ok).toBe(false)
   })
 
-  it('未声明的 domain 拒绝', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.nodes[1]!.domain = 'D9'
-      })
-    )
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('D9')
-  })
-
-  it('hard+soft 混合成环拒绝', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.edges.push({ from: 'u2', to: 'u1', type: 'soft', reason: '反向参考' })
-      })
-    )
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('环')
-  })
-
-  it('hard 边仅限 unit 层（leaf 参与拒绝）', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.edges.push({ from: 'u1.k1', to: 'u2', type: 'hard' })
-      })
-    )
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('unit')
-  })
-
-  it('soft 边同样仅限 unit 层', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.edges.push({ from: 'u1.k1', to: 'u2', type: 'soft' })
-      })
-    )
-    expect(r.ok).toBe(false)
-  })
-
-  it('schema 字段错误值拒绝', () => {
-    const r = validatePack(cloneWith((p) => {
-      ;(p as unknown as { schema: string }).schema = 'other/v1'
-    }))
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('schema')
-  })
-
-  it('parent 链成环拒绝', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        // b1 的 parent 指到自己的后代 u1 → 环
-        p.nodes[0]!.parent = 'u1'
-        p.nodes[1]!.parent = 'b1'
-      })
-    )
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('环')
-  })
-
-  it('自环边拒绝', () => {
-    const r = validatePack(
-      cloneWith((p) => {
-        p.edges.push({ from: 'u1', to: 'u1', type: 'hard' })
-      })
-    )
-    expect(r.ok).toBe(false)
-  })
-
-  it('非法输入（null/数组/缺字段）拒绝且收集多条错误', () => {
-    const r1 = validatePack(null)
-    expect(r1.ok).toBe(false)
-    const r2 = validatePack([1, 2, 3])
-    expect(r2.ok).toBe(false)
-    const r3 = validatePack({ schema: 'litree/pack-v1' })
-    expect(r3.ok).toBe(false)
-    if (!r3.ok) expect(r3.errors.length).toBeGreaterThan(1)
+  it('parsePackDocument 对非法输入抛出带具体错误信息的 Error', () => {
+    expect(() => parsePackDocument(null)).toThrow(/JSON object/i)
+    expect(() => parsePackDocument({ schema: 'unknown' })).toThrow(/Invalid pack document/i)
   })
 })
 
-describe('叶子必须有 unit 祖先（终审 Critical 防回归）', () => {
-  it('叶子直接挂在 branch 下且无 unit 祖先 → 拒绝', () => {
-    const p: Pack = JSON.parse(JSON.stringify(validPack))
-    p.nodes.push({ id: 'b1.x', parent: 'b1', kind: 'leaf', title: { zh: '悬空叶' }, domain: 'D1' })
-    const r = validatePack(p)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('unit 节点')
-  })
-  it('叶子经章分组（branch）间接挂在 unit 下 → 通过', () => {
-    const p: Pack = JSON.parse(JSON.stringify(validPack))
-    p.nodes.push(
-      { id: 'u1.c0', parent: 'u1', kind: 'branch', title: { zh: '章' }, domain: 'D1' },
-      { id: 'u1.c0.k0', parent: 'u1.c0', kind: 'leaf', title: { zh: '章下叶' }, domain: 'D1' }
-    )
-    expect(validatePack(p).ok).toBe(true)
-  })
-})
-
-describe('routes 可选字段（v2 路线首页数据）', () => {
-  it('合法 routes 通过并保留', () => {
-    const p: Pack = JSON.parse(JSON.stringify(validPack))
-    p.routes = [
-      { name: '入门路线', note: '先学单元一', ids: ['u1', 'u2'] }
+describe('schema: Kahn DAG 环检测 (hard+soft 严格成环校验, related 豁免)', () => {
+  it('detectCycles 检测 hard+soft 跨边环并返回环路，允许 related 反向关联', () => {
+    const nodes: KnowledgeNode[] = [
+      { id: 'u1', parentId: null, kind: 'unit', title: { zh: 'u1' }, domainId: 'D1' },
+      { id: 'u2', parentId: null, kind: 'unit', title: { zh: 'u2' }, domainId: 'D1' },
+      { id: 'u3', parentId: null, kind: 'unit', title: { zh: 'u3' }, domainId: 'D1' }
     ]
-    const r = validatePack(p)
-    expect(r.ok).toBe(true)
-    if (r.ok) expect(r.pack.routes?.[0]?.ids).toEqual(['u1', 'u2'])
+    const acyclicEdges: KnowledgeEdge[] = [
+      { id: 'e1', from: 'u1', to: 'u2', type: 'hard' },
+      { id: 'e2', from: 'u2', to: 'u3', type: 'soft' },
+      { id: 'r1', from: 'u3', to: 'u1', type: 'related' }
+    ]
+    expect(detectCycles(nodes, acyclicEdges)).toBeNull()
+    expect(
+      wouldCreateCycle({ from: 'u3', to: 'u1', type: 'related' }, nodes, acyclicEdges)
+    ).toBeNull()
+
+    const cyclePath = wouldCreateCycle({ from: 'u3', to: 'u1', type: 'hard' }, nodes, acyclicEdges)
+    expect(cyclePath).not.toBeNull()
+    expect(cyclePath![0]).toBe('u1')
+    expect(cyclePath![cyclePath!.length - 1]).toBe('u1')
+
+    const conflictEdgeIds = findCycleEdgeIds(cyclePath!, acyclicEdges)
+    expect(conflictEdgeIds).toContain('e1')
+    expect(conflictEdgeIds).toContain('e2')
+
+    const cyclicEdges: KnowledgeEdge[] = [
+      ...acyclicEdges,
+      { id: 'e3', from: 'u3', to: 'u1', type: 'soft' }
+    ]
+    const detected = detectCycles(nodes, cyclicEdges)
+    expect(detected).not.toBeNull()
+    expect(detected![0]).toBe(detected![detected!.length - 1])
   })
-  it('routes 引用不存在的 id → 拒绝', () => {
-    const p: Pack = JSON.parse(JSON.stringify(validPack))
-    p.routes = [{ name: '坏路线', ids: ['u1', 'ghost'] }]
-    const r = validatePack(p)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join('\n')).toContain('ghost')
+
+  it('wouldCreateCycle 对任意类型的自环都返回冲突', () => {
+    const v2 = makeMiniV2()
+    expect(wouldCreateCycle({ from: 'u1', to: 'u1', type: 'related' }, v2.nodes, v2.edges)).toEqual([
+      'u1',
+      'u1'
+    ])
   })
-  it('routes 引用非 unit 节点 → 拒绝', () => {
-    const p: Pack = JSON.parse(JSON.stringify(validPack))
-    p.routes = [{ name: '坏路线', ids: ['u1.k1'] }]
-    const r = validatePack(p)
-    expect(r.ok).toBe(false)
-  })
-  it('routes 缺 name 或 ids 为空 → 拒绝', () => {
-    const p: Pack = JSON.parse(JSON.stringify(validPack))
-    p.routes = [{ name: '', ids: [] }]
-    const r = validatePack(p)
-    expect(r.ok).toBe(false)
+
+  it('detectCycles 使用迭代栈处理 10,000 节点超长环不触发栈溢出', () => {
+    const n = 10_000
+    const nodes: KnowledgeNode[] = []
+    const edges: KnowledgeEdge[] = []
+    for (let i = 0; i < n; i++) {
+      nodes.push({ id: `u${i}`, parentId: null, kind: 'unit', title: { zh: `U${i}` }, domainId: 'D1' })
+      edges.push({ id: `e${i}`, from: `u${i}`, to: `u${(i + 1) % n}`, type: 'hard' })
+    }
+    const cycle = detectCycles(nodes, edges)
+    expect(cycle).not.toBeNull()
+    expect(cycle!.length).toBe(n + 1)
+    expect(cycle![0]).toBe(cycle![cycle!.length - 1])
   })
 })

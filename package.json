@@ -1,29 +1,42 @@
 {
-  "name": "litree",
-  "version": "0.1.0",
-  "description": "LitTree 点亮之树 — 学科科技树网页应用",
+  "name": "litree-galaxy",
+  "version": "2.0.0",
+  "description": "LitTree Galaxy — 3D Interactive Nebula Knowledge Universe",
   "license": "MIT",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "test": "vitest run",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
-    "convert:csmath": "node scripts/convert-csmath.mjs",
-    "augment:csmath": "node scripts/augment-csmath.mjs",
+    "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.65.0",
-    "@types/node": "^26.6.6",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.6",
-    "vitest": "^5.1.0"
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "verify": "npm run typecheck && npm test && npm run build && npm run test:e2e",
+    "convert:csmath": "node scripts/convert-csmath.mjs",
+    "augment:csmath": "node scripts/augment-csmath.mjs"
   },
   "dependencies": {
-    "elkjs": "^0.12.1"
+    "framer-motion": "^14.14.0",
+    "lucide-react": "^1.73.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "@vitest/coverage-v8": "^5.1.0",
+    "happy-dom": "^21.0.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
   }
 }
