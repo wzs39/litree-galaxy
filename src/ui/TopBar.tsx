@@ -1,8 +1,10 @@
 import {
   Archive,
   ArrowLeft,
+  Box,
   Compass,
   HelpCircle,
+  Map as MapIcon,
   Pencil,
   RotateCcw,
   Search,
@@ -38,6 +40,7 @@ interface TopBarProps {
   activeDomains: readonly string[]
   activeLens: ActiveLens
   editMode: boolean
+  renderMode?: '2d' | '3d'
   theme: ThemeMode
   quality: QualityPreset
   onSwitchPack: (packId: string) => void
@@ -49,6 +52,7 @@ interface TopBarProps {
   onSetLens: (lens: ActiveLens) => void
   onOpenSearch: () => void
   onToggleEditMode: () => void
+  onToggleRenderMode?: () => void
   onSetTheme: (theme: ThemeMode) => void
   onSetQuality: (quality: QualityPreset) => void
   onOpenBackup: () => void
@@ -67,6 +71,7 @@ export function TopBar({
   activeDomains,
   activeLens,
   editMode,
+  renderMode = '2d',
   theme,
   quality,
   onSwitchPack,
@@ -78,6 +83,7 @@ export function TopBar({
   onSetLens,
   onOpenSearch,
   onToggleEditMode,
+  onToggleRenderMode,
   onSetTheme,
   onSetQuality,
   onOpenBackup,
@@ -172,6 +178,20 @@ export function TopBar({
             <Pencil size={13} />
             <span>编辑</span>
           </button>
+
+          {onToggleRenderMode && (
+            <button
+              type="button"
+              className={`hud-btn ${renderMode === '3d' ? 'active' : ''}`}
+              data-testid="toggle-3d-view"
+              aria-pressed={renderMode === '3d'}
+              onClick={onToggleRenderMode}
+              title="切换 2D 平面图 / 3D 实验星云"
+            >
+              {renderMode === '3d' ? <MapIcon size={13} /> : <Box size={13} />}
+              <span>{renderMode === '3d' ? '切回 2D' : '3D 视图'}</span>
+            </button>
+          )}
 
           <select
             data-testid="theme-switcher"

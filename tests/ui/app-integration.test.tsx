@@ -161,6 +161,11 @@ describe('App Integration in happy-dom (2D Fallback + Shortcuts + Focus Timer)',
       appStore.getState().setTheme('daylight')
     })
     expect(document.documentElement.getAttribute('data-theme')).toBe('daylight')
+
+    // Default 2D view mounts zoom controls and experimental 3D toggle button
+    expect(container.querySelector('[data-testid="zoom-controls-2d"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="toggle-3d-view"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="webgl-fallback-banner"]')).toBeNull()
   })
 
   it('preserves FocusTimer totalSec and exact remainingSec < 60s across pause/resume/re-pause and completes with full duration', async () => {

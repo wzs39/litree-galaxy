@@ -7,6 +7,7 @@ import { appStore, useAppStore } from './core/store'
 import type { NebulaVisualSnapshot, NodeVisualState } from './core/types'
 import { detectWebGL, NebulaEngine } from './engine/NebulaEngine'
 import { computeGalaxyLayout } from './layout/galaxyLayout'
+import { computeSemantic2DLayout } from './layout/semantic2dLayout'
 import { BackupModal } from './ui/BackupModal'
 import { CommandPalette, type PaletteCommand } from './ui/CommandPalette'
 import { ConstellationRadar } from './ui/ConstellationRadar'
@@ -89,13 +90,21 @@ export function App() {
     typeof window !== 'undefined' ? window.innerWidth <= 768 : false
   )
   const [toasts, setToasts] = useState<ToastMessage[]>([])
-  const [fallbackMode, setFallbackMode] = useState(() => !detectWebGL().supported)
+  const [renderMode, setRenderMode] = useState<'2d' | '3d'>('2d')
+  const [webglUnavailableBanner, setWebglUnavailableBanner] = useState(false)
   const [engineInstance, setEngineInstance] = useState<NebulaEngine | null>(null)
   const [fallbackResetToken, setFallbackResetToken] = useState(0)
   const [fallbackPanReq, setFallbackPanReq] = useState<{
     nx: number
     ny: number
+    zoomMul?: number
     seq: number
+  } | null>(null)
+  const [viewportNorm, setViewportNorm] = useState<{
+    minX: number
+    minY: number
+    maxX: number
+    maxY: number
   } | null>(null)
   const [lastBurstAt, setLastBurstAt] = useState(0)
 
@@ -213,6 +222,16 @@ export function App() {
     [pack, index]
   )
 
+  const semanticLayout = useMemo(
+    () =>
+      pack && index
+        ? computeSemantic2DLayout(pack, index, {
+            focusClusterId: viewLevel !== 'galaxy' ? focusClusterId : null
+          })
+        : null,
+    [pack, index, viewLevel, focusClusterId]
+  )
+
   const litLeaves = useMemo(
     () => (progress && index ? getLitLeavesSet(progress, index) : new Set<string>()),
     [progress, index]
@@ -312,6 +331,16 @@ export function App() {
       const offset = window.innerWidth > 768 ? 420 : 0
       if (engineRef.current) {
         engineRef.current.flyToNode(nodeId, { offsetRightPx: offset })
+      } else if (semanticLayout) {
+        const n2d = semanticLayout.nodes.get(nodeId)
+        if (n2d) {
+          setFallbackPanReq((prev) => ({
+            nx: n2d.nx,
+            ny: n2d.ny,
+            zoomMul: n2d.kind === 'leaf' ? 2.6 : 1.75,
+            seq: (prev?.seq ?? 0) + 1
+          }))
+        }
       } else if (galaxyLayout) {
         const n2d = galaxyLayout.projected2D.get(nodeId)
         if (n2d) {
@@ -319,18 +348,19 @@ export function App() {
         }
       }
     },
-    [selectNode, galaxyLayout]
+    [selectNode, semanticLayout, galaxyLayout]
   )
 
-  // Mount & dispose WebGL NebulaEngine
+  // Mount & dispose WebGL NebulaEngine only when user switches to 3D experimental mode
   useEffect(() => {
-    if (fallbackMode) return
+    if (renderMode !== '3d') return
     const host = canvasHostRef.current
     if (!host) return
 
     const webgl = detectWebGL()
     if (!webgl.supported) {
-      setFallbackMode(true)
+      setWebglUnavailableBanner(true)
+      setRenderMode('2d')
       return
     }
 
@@ -361,7 +391,8 @@ export function App() {
         },
         onContextLost: () => {
           lostSynchronously = true
-          setFallbackMode(true)
+          setWebglUnavailableBanner(true)
+          setRenderMode('2d')
         }
       },
       { theme: appStore.getState().theme, quality: appStore.getState().quality }
@@ -371,7 +402,8 @@ export function App() {
       engine.dispose()
       engineRef.current = null
       setEngineInstance(null)
-      setFallbackMode(true)
+      setWebglUnavailableBanner(true)
+      setRenderMode('2d')
       return
     }
 
@@ -385,7 +417,7 @@ export function App() {
       }
       setEngineInstance(null)
     }
-  }, [fallbackMode])
+  }, [renderMode])
 
   // Sync pack & layout to NebulaEngine
   useEffect(() => {
@@ -515,6 +547,16 @@ export function App() {
         offsetRightPx: selectedId ? getDesktopDrawerOffset() : 0
       })
       engineRef.current.cameraRig.setFocusOrbit(true, 0.55)
+    } else if (firstUnit && semanticLayout) {
+      const p2d = semanticLayout.nodes.get(firstUnit.id)
+      if (p2d) {
+        setFallbackPanReq((prev) => ({
+          nx: p2d.nx,
+          ny: p2d.ny,
+          zoomMul: 1.75,
+          seq: (prev?.seq ?? 0) + 1
+        }))
+      }
     } else if (firstUnit && galaxyLayout) {
       const p2d = galaxyLayout.projected2D.get(firstUnit.id)
       if (p2d) {
@@ -531,6 +573,7 @@ export function App() {
     activeRouteId,
     activeDomains,
     selectedId,
+    semanticLayout,
     galaxyLayout,
     selectAndFly,
     getDesktopDrawerOffset,
@@ -619,9 +662,30 @@ export function App() {
     handleResetView()
   }, [handleResetView])
 
+  const handleToggleRenderMode = useCallback(() => {
+    if (renderMode === '2d') {
+      const webgl = detectWebGL()
+      if (!webgl.supported) {
+        setWebglUnavailableBanner(true)
+        pushToast('当前浏览器未开启 WebGL2，保持在 2D 平面星图视图', 'info')
+        return
+      }
+      setWebglUnavailableBanner(false)
+      setRenderMode('3d')
+    } else {
+      setRenderMode('2d')
+    }
+  }, [renderMode, pushToast])
+
   const paletteCommands: PaletteCommand[] = useMemo(
     () => [
       { id: 'cmd-reset', label: '重置星云视角', hint: 'View', run: handleResetView },
+      {
+        id: 'cmd-toggle-3d',
+        label: renderMode === '3d' ? '切换回 2D 平面星图视图' : '切换到 3D 实验星云视图',
+        hint: '2D/3D',
+        run: handleToggleRenderMode
+      },
       {
         id: 'cmd-orbit',
         label: '继续今日轨道巡航',
@@ -666,7 +730,7 @@ export function App() {
       },
       { id: 'cmd-help', label: '查看快捷键与帮助', hint: '?', run: () => setHelpOpen(true) }
     ],
-    [handleResetView, handleContinueOrbit, editMode, setEditMode, setTheme]
+    [handleResetView, handleToggleRenderMode, renderMode, handleContinueOrbit, editMode, setEditMode, setTheme]
   )
 
   const selectedNode = useMemo(
@@ -677,13 +741,14 @@ export function App() {
   return (
     <MotionConfig reducedMotion="user">
       <div className="app-viewport" data-testid="app-shell">
-        {!fallbackMode ? (
+        {renderMode === '3d' ? (
           <div ref={canvasHostRef} className="canvas-stage" />
         ) : pack && index && galaxyLayout ? (
           <FallbackConstellation
             pack={pack}
             index={index}
             galaxyLayout={galaxyLayout}
+            semanticLayout={semanticLayout}
             nodeStates={nodeStates}
             viewLevel={viewLevel}
             focusClusterId={focusClusterId}
@@ -692,23 +757,43 @@ export function App() {
             activeDomains={activeDomains}
             activeLens={activeLens}
             activeRouteUnitIds={activeRouteUnitIds}
+            pathTraceHighlight={pathTraceHighlight}
             bookmarkedIds={bookmarkedIds}
             theme={theme}
+            quality={quality}
             resetToken={fallbackResetToken}
             lastBurstAt={lastBurstAt}
             panRequest={fallbackPanReq}
-            onSelect={selectNode}
+            desktopDrawerOpen={selectedNode !== null}
+            showWebglFallbackBanner={webglUnavailableBanner}
+            onSelect={(id) => {
+              selectNode(id)
+              if (id && semanticLayout) {
+                const n2d = semanticLayout.nodes.get(id)
+                if (n2d) {
+                  setFallbackPanReq((prev) => ({
+                    nx: n2d.nx,
+                    ny: n2d.ny,
+                    zoomMul: n2d.kind === 'leaf' ? 2.4 : 1.5,
+                    seq: (prev?.seq ?? 0) + 1
+                  }))
+                }
+              }
+            }}
             onDrillDown={(id) => {
               const node = index.nodesById.get(id)
               if (node && node.kind !== 'leaf') enterCluster(id)
             }}
             onHover={hoverNode}
+            onViewportChange={setViewportNorm}
           />
         ) : (
           <div className="fallback-2d-view" data-testid="fallback-2d-view">
-            <div className="webgl-fallback-banner" role="status" data-testid="webgl-fallback-banner">
-              正在加载 2D 星图兼容视图...
-            </div>
+            {webglUnavailableBanner && (
+              <div className="webgl-fallback-banner" role="status" data-testid="webgl-fallback-banner">
+                正在加载 2D 平面星图视图...
+              </div>
+            )}
           </div>
         )}
 
@@ -724,6 +809,7 @@ export function App() {
             activeDomains={activeDomains}
             activeLens={activeLens}
             editMode={editMode}
+            renderMode={renderMode}
             theme={theme}
             quality={quality}
             onSwitchPack={(id) => void switchPack(id)}
@@ -735,6 +821,7 @@ export function App() {
             onSetLens={setActiveLens}
             onOpenSearch={() => setPaletteOpen(true)}
             onToggleEditMode={() => setEditMode(!editMode)}
+            onToggleRenderMode={handleToggleRenderMode}
             onSetTheme={setTheme}
             onSetQuality={setQuality}
             onOpenBackup={() => setBackupOpen(true)}
@@ -761,13 +848,15 @@ export function App() {
               pack={pack}
               index={index}
               galaxyLayout={galaxyLayout}
+              semanticLayout={semanticLayout}
+              viewportNorm={viewportNorm}
               nodeStates={nodeStates}
               selectedId={selectedId}
               engine={engineInstance}
               drawerOpen={selectedNode !== null}
               offsetRightPx={selectedNode ? getDesktopDrawerOffset() : 0}
               onRadarClickNormalized={(nx, ny) =>
-                setFallbackPanReq((prev) => ({ nx, ny, seq: (prev?.seq ?? 0) + 1 }))
+                setFallbackPanReq((prev) => ({ nx, ny, zoomMul: 1, seq: (prev?.seq ?? 0) + 1 }))
               }
             />
           )}

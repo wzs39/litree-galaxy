@@ -911,6 +911,43 @@ describe('M3 UI Components & DOM Contracts', () => {
     expect(onHover).toHaveBeenCalledTimes(1)
     expect(onHover).toHaveBeenCalledWith('u1')
 
+    // Re-render with hoveredId='u1' renders the 2D Hover Quick Info Card
+    act(() => {
+      root.render(
+        <FallbackConstellation
+          pack={pack}
+          index={index}
+          galaxyLayout={galaxyLayout}
+          nodeStates={nodeStates}
+          viewLevel="galaxy"
+          focusClusterId={null}
+          selectedId={null}
+          hoveredId="u1"
+          activeDomains={[]}
+          activeLens="all"
+          activeRouteUnitIds={['u1']}
+          bookmarkedIds={new Set(['u2'])}
+          theme="daylight"
+          showWebglFallbackBanner={false}
+          resetToken={0}
+          lastBurstAt={0}
+          panRequest={null}
+          onSelect={vi.fn()}
+          onDrillDown={vi.fn()}
+          onHover={onHover}
+        />
+      )
+    })
+    act(() => {
+      viewEl.dispatchEvent(
+        new PointerEvent('pointermove', { clientX: pU1!.x, clientY: pU1!.y, bubbles: true })
+      )
+    })
+    const hoverCard = container.querySelector('[data-testid="node-hover-card"]')
+    expect(hoverCard).not.toBeNull()
+    expect(hoverCard?.textContent).toContain('极限与连续')
+    expect(container.querySelector('[data-testid="webgl-fallback-banner"]')).toBeNull()
+
     vi.restoreAllMocks()
   })
 })

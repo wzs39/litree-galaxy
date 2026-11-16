@@ -922,6 +922,75 @@ button:disabled {
   color: var(--danger);
 }
 
+/* 2D Hover Quick Info Card & Zoom Controls */
+.node-hover-card {
+  position: fixed;
+  z-index: 28;
+  width: 280px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.node-hover-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.node-hover-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.node-hover-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.node-hover-summary {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.node-hover-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-subtle);
+  padding-top: 2px;
+}
+
+.zoom-controls-2d {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+}
+
+.zoom-percent-readout {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
 /* ErrorBoundary fallback */
 .error-boundary-screen {
   min-height: 100vh;
@@ -986,7 +1055,8 @@ button:disabled {
     max-height: min(260px, calc(100dvh - var(--topbar-h, 130px) - 24px));
   }
 
-  .constellation-radar {
+  .constellation-radar,
+  .zoom-controls-2d {
     display: none;
   }
 

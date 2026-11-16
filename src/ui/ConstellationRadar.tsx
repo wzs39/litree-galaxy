@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import type { NebulaEngine } from '../engine/NebulaEngine'
 import { computeFallback2DLayout } from '../layout/fallbackLayout'
+import type { Semantic2DLayout } from '../layout/semantic2dLayout'
 import type { GalaxyLayoutResult } from '../layout/galaxyLayout'
 import type { GraphIndex, LitreeTelemetry, NodeVisualState, PackDocument } from '../core/types'
 
@@ -9,6 +10,8 @@ interface ConstellationRadarProps {
   pack: PackDocument
   index: GraphIndex
   galaxyLayout: GalaxyLayoutResult
+  semanticLayout?: Semantic2DLayout | null
+  viewportNorm?: { minX: number; minY: number; maxX: number; maxY: number } | null
   nodeStates: ReadonlyMap<string, NodeVisualState>
   selectedId: string | null
   engine: NebulaEngine | null
@@ -40,6 +43,8 @@ export function ConstellationRadar({
   pack,
   index,
   galaxyLayout,
+  semanticLayout = null,
+  viewportNorm = null,
   nodeStates,
   selectedId,
   engine,
@@ -56,14 +61,18 @@ export function ConstellationRadar({
     heightPct: 44
   })
 
+  const useSemantic2D = !engine && semanticLayout !== null
+
   const layout2D = useMemo(
     () =>
-      computeFallback2DLayout(pack, index, galaxyLayout, {
-        width: RADAR_W,
-        height: RADAR_H,
-        padding: 0.05
-      }),
-    [pack, index, galaxyLayout]
+      useSemantic2D
+        ? null
+        : computeFallback2DLayout(pack, index, galaxyLayout, {
+            width: RADAR_W,
+            height: RADAR_H,
+            padding: 0.05
+          }),
+    [useSemantic2D, pack, index, galaxyLayout]
   )
 
   useEffect(() => {
@@ -73,6 +82,27 @@ export function ConstellationRadar({
     if (!ctx) return
 
     ctx.clearRect(0, 0, RADAR_W, RADAR_H)
+
+    if (useSemantic2D && semanticLayout) {
+      for (const region of semanticLayout.regions.values()) {
+        ctx.beginPath()
+        ctx.arc(region.nx * RADAR_W, region.ny * RADAR_H, 14, 0, Math.PI * 2)
+        ctx.fillStyle = `${region.color}28`
+        ctx.fill()
+      }
+      for (const node2d of semanticLayout.nodes.values()) {
+        const st = nodeStates.get(node2d.id) ?? 'available'
+        const isSelected = selectedId === node2d.id
+        const r = isSelected ? 3.5 : node2d.kind === 'leaf' ? 1.1 : node2d.kind === 'unit' ? 2.1 : 2.8
+        ctx.fillStyle = isSelected ? '#ffffff' : STATE_HEX[st]
+        ctx.beginPath()
+        ctx.arc(node2d.nx * RADAR_W, node2d.ny * RADAR_H, r, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      return
+    }
+
+    if (!layout2D) return
 
     // Draw domain centroids softly
     for (const domain of pack.domains) {
@@ -94,9 +124,34 @@ export function ConstellationRadar({
       ctx.arc(node2d.x, node2d.y, r, 0, Math.PI * 2)
       ctx.fill()
     }
-  }, [layout2D, pack.domains, nodeStates, selectedId])
+  }, [useSemantic2D, semanticLayout, layout2D, pack.domains, nodeStates, selectedId])
 
   useEffect(() => {
+    if (useSemantic2D && viewportNorm) {
+      const nextLeft = Math.max(0, Math.min(88, viewportNorm.minX * 100))
+      const nextTop = Math.max(0, Math.min(88, viewportNorm.minY * 100))
+      const nextWidth = Math.max(12, Math.min(100 - nextLeft, (viewportNorm.maxX - viewportNorm.minX) * 100))
+      const nextHeight = Math.max(12, Math.min(100 - nextTop, (viewportNorm.maxY - viewportNorm.minY) * 100))
+      setViewportBox((prev) => {
+        if (
+          Math.abs(prev.leftPct - nextLeft) <= 0.1 &&
+          Math.abs(prev.topPct - nextTop) <= 0.1 &&
+          Math.abs(prev.widthPct - nextWidth) <= 0.1 &&
+          Math.abs(prev.heightPct - nextHeight) <= 0.1
+        ) {
+          return prev
+        }
+        return {
+          leftPct: nextLeft,
+          topPct: nextTop,
+          widthPct: nextWidth,
+          heightPct: nextHeight
+        }
+      })
+      return
+    }
+
+    if (!layout2D) return
     const updateViewport = () => {
       const tel = (window as unknown as { __LITREE_TELEMETRY__?: LitreeTelemetry })
         .__LITREE_TELEMETRY__
@@ -159,7 +214,7 @@ export function ConstellationRadar({
       cancelAnimationFrame(rafId)
       controls?.removeEventListener('change', updateViewport)
     }
-  }, [engine, layout2D])
+  }, [engine, layout2D, useSemantic2D, viewportNorm])
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = containerRef.current
@@ -169,7 +224,7 @@ export function ConstellationRadar({
     const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
     const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
 
-    if (engine) {
+    if (engine && layout2D) {
       const [wx, wz] = layout2D.normalizedToWorldXZ(nx, ny)
       const currentTarget = engine.cameraRig.controls.target.clone()
       const offset = engine.camera.position.clone().sub(currentTarget)
